@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Book an Appointment - Appoint</title>
+  <link rel="stylesheet" href="/styles/main.css">
+</head>
+<body>
+  <header class="header">
+    <div class="container">
+      <a href="/" class="logo">Appoint</a>
+      <nav class="nav">
+        <a href="/booking">Book</a>
+        <a href="/appointments">My Appointments</a>
+      </nav>
+    </div>
+  </header>
+  <main class="main">
+    <div class="container">
+      <h1>Book an Appointment</h1>
+      <div class="card">
+        <div id="step-1" class="booking-step">
+          <h2>Select a Provider</h2>
+          <div id="providers-list" class="grid grid-2">
+            <div class="loading">
+              <div class="spinner"></div>
+            </div>
+          </div>
+        </div>
+        <div id="step-2" class="booking-step" style="display: none;">
+          <h2>Select a Service</h2>
+          <div id="services-list" class="grid grid-2"></div>
+          <button class="btn btn-secondary" onclick="goToStep(1)">Back</button>
+        </div>
+        <div id="step-3" class="booking-step" style="display: none;">
+          <h2>Select a Date & Time</h2>
+          <div class="form-group">
+            <label class="form-label">Date</label>
+            <input type="date" id="date-picker" class="form-input">
+          </div>
+          <div id="slots-container" class="grid grid-2"></div>
+          <button class="btn btn-secondary" onclick="goToStep(2)">Back</button>
+        </div>
+        <div id="step-4" class="booking-step" style="display: none;">
+          <h2>Confirm Booking</h2>
+          <div id="booking-summary" class="card"></div>
+          <div class="form-group">
+            <label class="form-label">Your Name</label>
+            <input type="text" id="customer-name" class="form-input" placeholder="Enter your name">
+          </div>
+          <div class="actions">
+            <button class="btn btn-primary" onclick="confirmBooking()">Confirm Booking</button>
+            <button class="btn btn-secondary" onclick="goToStep(3)">Back</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+  <script src="/components/booking.js"></script>
+</body>
+</html>

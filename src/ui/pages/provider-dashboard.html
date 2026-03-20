@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Provider Dashboard - Appoint</title>
+  <link rel="stylesheet" href="/styles/main.css">
+</head>
+<body>
+  <header class="header">
+    <div class="container">
+      <a href="/" class="logo">Appoint</a>
+      <nav class="nav">
+        <a href="/provider/dashboard">Dashboard</a>
+        <a href="/provider/calendar">Calendar</a>
+      </nav>
+    </div>
+  </header>
+  <main class="main">
+    <div class="container">
+      <h1>Provider Dashboard</h1>
+      <div class="grid grid-2">
+        <div class="card">
+          <h2>Services</h2>
+          <div id="services-list">
+            <div class="loading">
+              <div class="spinner"></div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Add New Service</label>
+            <input type="text" id="service-name" class="form-input" placeholder="Service name">
+            <input type="number" id="service-duration" class="form-input" placeholder="Duration (minutes)" min="15" max="480">
+            <button class="btn btn-primary" onclick="addService()">Add Service</button>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Availability</h2>
+          <div id="availability-list">
+            <div class="loading">
+              <div class="spinner"></div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Add Availability</label>
+            <select id="avail-day" class="form-input">
+              <option value="0">Sunday</option>
+              <option value="1">Monday</option>
+              <option value="2">Tuesday</option>
+              <option value="3">Wednesday</option>
+              <option value="4">Thursday</option>
+              <option value="5">Friday</option>
+              <option value="6">Saturday</option>
+            </select>
+            <input type="time" id="avail-start" class="form-input" value="09:00">
+            <input type="time" id="avail-end" class="form-input" value="17:00">
+            <button class="btn btn-primary" onclick="addAvailability()">Add Availability</button>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Blocked Dates</h2>
+          <div id="blocked-dates-list">
+            <div class="loading">
+              <div class="spinner"></div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Block a Date</label>
+            <input type="date" id="blocked-date" class="form-input">
+            <input type="text" id="blocked-reason" class="form-input" placeholder="Reason (optional)">
+            <button class="btn btn-primary" onclick="addBlockedDate()">Block Date</button>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Pending Appointments</h2>
+          <div id="pending-appointments">
+            <div class="loading">
+              <div class="spinner"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const providerId = urlParams.get('provider_id');
+
+    document.addEventListener('DOMContentLoaded', loadDashboard);
+
+    async function loadDashboard() {
+      await Promise.all([
+        loadServices(),
+        loadAvailability(),
+        loadBlockedDates(),
+        loadPendingAppointments(),
+      ]);
+    }
+
+    async function loadServices() {
+      try {
+        const response = await fetch(`/api/providers/${providerId}/services`, {
+          headers: { Authorization: `Bearer ${getFirebaseToken()}` },
+        });
+        const data = await response.json();
+        renderServices(data.services || []);
+      } catch (error) {
+        console.error('Error loading services:', error);
+      }
+    }
+
+    function renderServices(services) {
+      const container = document.getElementById('services-list');
+      if (services.length === 0) {
+        container.innerHTML = '<p>No services added yet</p>';
+        return;
+      }
+      container.innerHTML = services
+        .map(s => `<div class="card"><p><strong>${s.name}</strong> - ${s.duration_minutes} min</p></div>`)
+        .join('');
+    }
+
+    async function addService() {
+      const name = document.getElementById('service-name').value;
+      const duration = parseInt(document.getElementById('service-duration').value);
+
+      if (!name || !duration) {
+        alert('Please enter service name and duration');
+        return;
+      }
+
+      try {
+        await fetch(`/api/providers/${providerId}/services`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${getFirebaseToken()}`,
+          },
+          body: JSON.stringify({ name, duration_minutes: duration }),
+        });
+        loadServices();
+      } catch (error) {
+        console.error('Error adding service:', error);
+      }
+    }
+
+    async function loadAvailability() {
+      // Implementation similar to loadServices
+      document.getElementById('availability-list').innerHTML = '<p>Availability loaded</p>';
+    }
+
+    async function addAvailability() {
+      const day = parseInt(document.getElementById('avail-day').value);
+      const startTime = document.getElementById('avail-start').value;
+      const endTime = document.getElementById('avail-end').value;
+
+      try {
+        await fetch(`/api/providers/${providerId}/availability`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${getFirebaseToken()}`,
+          },
+          body: JSON.stringify({ day_of_week: day, start_time: startTime, end_time: endTime }),
+        });
+        loadAvailability();
+      } catch (error) {
+        console.error('Error adding availability:', error);
+      }
+    }
+
+    async function loadBlockedDates() {
+      document.getElementById('blocked-dates-list').innerHTML = '<p>Blocked dates loaded</p>';
+    }
+
+    async function addBlockedDate() {
+      const date = document.getElementById('blocked-date').value;
+      const reason = document.getElementById('blocked-reason').value;
+
+      if (!date) {
+        alert('Please select a date');
+        return;
+      }
+
+      try {
+        await fetch(`/api/providers/${providerId}/blocked-dates`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${getFirebaseToken()}`,
+          },
+          body: JSON.stringify({ date, reason }),
+        });
+        loadBlockedDates();
+      } catch (error) {
+        console.error('Error adding blocked date:', error);
+      }
+    }
+
+    async function loadPendingAppointments() {
+      document.getElementById('pending-appointments').innerHTML = '<p>Pending appointments loaded</p>';
+    }
+
+    function getFirebaseToken() {
+      return localStorage.getItem('firebase_token') || '';
+    }
+  </script>
+</body>
+</html>

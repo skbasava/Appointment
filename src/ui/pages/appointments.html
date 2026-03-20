@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Appointments - Appoint</title>
+  <link rel="stylesheet" href="/styles/main.css">
+</head>
+<body>
+  <header class="header">
+    <div class="container">
+      <a href="/" class="logo">Appoint</a>
+      <nav class="nav">
+        <a href="/booking">Book</a>
+        <a href="/appointments">My Appointments</a>
+      </nav>
+    </div>
+  </header>
+  <main class="main">
+    <div class="container">
+      <h1>My Appointments</h1>
+      <div class="actions" style="margin-bottom: 1rem;">
+        <a href="/booking" class="btn btn-primary">Book New Appointment</a>
+      </div>
+      <div id="appointments-container">
+        <div class="loading">
+          <div class="spinner"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+  <div id="reschedule-modal" class="modal" style="display: none;">
+    <div class="modal-content card">
+      <h2>Reschedule Appointment</h2>
+      <div class="form-group">
+        <label class="form-label">New Date</label>
+        <input type="date" id="reschedule-date" class="form-input">
+      </div>
+      <div id="reschedule-slots" class="grid grid-2"></div>
+      <div class="actions">
+        <button class="btn btn-secondary" onclick="closeRescheduleModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+  <script src="/components/appointments.js"></script>
+</body>
+</html>

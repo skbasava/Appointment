@@ -1,50 +1,63 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!--
+Sync Impact Report
+- Version change: template → 1.0.0
+- Modified principles: N/A (initial creation)
+- Added sections: Library-First, Test-First (NON-NEGOTIABLE), Additional Constraints, Development Workflow, Governance
+- Removed sections: N/A (template placeholders replaced)
+- Templates requiring updates:
+  ✅ .specify/templates/plan-template.md (Constitution Check section aligns)
+  ✅ .specify/templates/spec-template.md (scope/requirements alignment verified)
+  ✅ .specify/templates/tasks-template.md (TDD task ordering matches)
+  ✅ .opencode/command/speckit.constitution.md (this file - no outdated refs)
+- Follow-up TODOs: None
+-->
+
+# Appoint Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Library-First
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+Every feature starts as a standalone library.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+- Libraries MUST be self-contained and independently testable.
+- Libraries MUST be documented with clear purpose.
+- No organizational-only libraries permitted; every library MUST deliver
+  tangible, testable functionality.
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+**Rationale**: Modular libraries enable independent development, testing, and
+reuse while preventing untestable monolithic structures.
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### II. Test-First (NON-NEGOTIABLE)
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+TDD is mandatory for all development.
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+- Tests MUST be written before implementation.
+- Tests MUST be reviewed and approved by the user before proceeding.
+- Tests MUST fail initially (Red phase).
+- Implementation proceeds only after Red-Green-Refactor cycle is followed.
+- The Red-Green-Refactor cycle MUST be strictly enforced; no exceptions.
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+**Rationale**: Test-first development ensures correctness, prevents regression,
+and validates requirements before committing to implementation.
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+## Additional Constraints
+
+- Technology choices MUST be justified and documented in the implementation plan.
+- External dependencies MUST be evaluated for necessity before adoption.
+
+## Development Workflow
+
+- All changes MUST pass constitution compliance review before merge.
+- Code review MUST verify adherence to Library-First and Test-First principles.
+- Implementation plans MUST include a Constitution Check gate.
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+- This constitution supersedes all other development practices.
+- Amendments require: documentation of change, approval, and migration plan.
+- All pull requests and reviews MUST verify constitutional compliance.
+- Complexity MUST be justified; simpler alternatives must be considered first.
+- Use project guidance files for runtime development guidance.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**Version**: 1.0.0 | **Ratified**: 2026-03-20 | **Last Amended**: 2026-03-20

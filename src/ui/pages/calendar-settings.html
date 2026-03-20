@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Calendar Settings - Appoint</title>
+  <link rel="stylesheet" href="/styles/main.css">
+</head>
+<body>
+  <header class="header">
+    <div class="container">
+      <a href="/" class="logo">Appoint</a>
+      <nav class="nav">
+        <a href="/provider">Dashboard</a>
+        <a href="/provider/calendar">Calendar</a>
+      </nav>
+    </div>
+  </header>
+  <main class="main">
+    <div class="container">
+      <h1>Calendar Settings</h1>
+      <div class="card">
+        <h2>Google Calendar Connection</h2>
+        <div id="calendar-status">
+          <div class="loading">
+            <div class="spinner"></div>
+          </div>
+        </div>
+        <div id="calendar-actions" style="display: none;">
+          <button id="connect-btn" class="btn btn-primary" onclick="connectCalendar()">Connect Google Calendar</button>
+          <button id="disconnect-btn" class="btn btn-error" style="display: none;" onclick="disconnectCalendar()">Disconnect</button>
+        </div>
+      </div>
+    </div>
+  </main>
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const providerId = urlParams.get('provider_id');
+
+    document.addEventListener('DOMContentLoaded', loadCalendarStatus);
+
+    async function loadCalendarStatus() {
+      try {
+        const response = await fetch(`/api/providers/${providerId}/calendar/status`, {
+          headers: { Authorization: `Bearer ${getFirebaseToken()}` },
+        });
+
+        if (!response.ok) throw new Error('Failed to load status');
+
+        const data = await response.json();
+        renderCalendarStatus(data);
+      } catch (error) {
+        console.error('Error loading calendar status:', error);
+        document.getElementById('calendar-status').innerHTML =
+          '<p class="alert alert-error">Failed to load calendar status</p>';
+      }
+    }
+
+    function renderCalendarStatus(status) {
+      const container = document.getElementById('calendar-status');
+      const actions = document.getElementById('calendar-actions');
+      const connectBtn = document.getElementById('connect-btn');
+      const disconnectBtn = document.getElementById('disconnect-btn');
+
+      actions.style.display = 'block';
+
+      if (status.connected) {
+        container.innerHTML = `
+          <p class="alert alert-success">Calendar connected</p>
+          <p>Status: ${status.status}</p>
+          ${status.last_synced_at ? `<p>Last synced: ${new Date(status.last_synced_at * 1000).toLocaleString()}</p>` : ''}
+        `;
+        connectBtn.style.display = 'none';
+        disconnectBtn.style.display = 'inline-block';
+      } else {
+        container.innerHTML = '<p>No calendar connected</p>';
+        connectBtn.style.display = 'inline-block';
+        disconnectBtn.style.display = 'none';
+      }
+    }
+
+    async function connectCalendar() {
+      try {
+        const response = await fetch(`/api/providers/${providerId}/calendar/connect`, {
+          headers: { Authorization: `Bearer ${getFirebaseToken()}` },
+        });
+
+        if (!response.ok) throw new Error('Failed to get auth URL');
+
+        const data = await response.json();
+        window.location.href = data.auth_url;
+      } catch (error) {
+        console.error('Error connecting calendar:', error);
+        alert('Failed to connect calendar');
+      }
+    }
+
+    async function disconnectCalendar() {
+      if (!confirm('Are you sure you want to disconnect your calendar?')) return;
+
+      // Implement disconnect logic
+      alert('Calendar disconnected');
+      loadCalendarStatus();
+    }
+
+    function getFirebaseToken() {
+      // Get Firebase token from localStorage or session
+      return localStorage.getItem('firebase_token') || '';
+    }
+  </script>
+</body>
+</html>
