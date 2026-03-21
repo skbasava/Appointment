@@ -271,7 +271,8 @@ ALTER TABLE providers ADD COLUMN phone_verified INTEGER DEFAULT 0;
 CREATE TABLE otp_sessions (
   id TEXT PRIMARY KEY,
   phone TEXT NOT NULL,
-  otp_hash TEXT NOT NULL,       -- bcrypt hash of 6-digit OTP + per-session salt
+  otp_hash TEXT NOT NULL,       -- SHA-256 hash (hex string)
+  otp_salt TEXT NOT NULL,       -- 16-byte random salt (hex string)
   channel TEXT NOT NULL,        -- 'whatsapp' or 'sms'
   expires_at TEXT NOT NULL,
   attempts INTEGER DEFAULT 0,   -- incremented on each wrong attempt, block at 3
@@ -308,8 +309,8 @@ Expired `otp_sessions` rows are cleaned up:
 - 10-minute expiry
 
 ### Storage
-- Hashed with bcrypt before storing in `otp_hash`
-- Per-session random salt included in the hash (bcrypt handles this automatically)
+- Hashed with SHA-256 + random salt via Web Crypto API (available natively in CF Workers)
+- Salt is 16 random bytes, stored alongside hash as `salt:hash` format
 - Plain OTP never stored or logged
 
 ### Verification Logic
@@ -318,21 +319,87 @@ Expired `otp_sessions` rows are cleaned up:
 2. If not found → "Code expired, request a new one"
 3. If found and attempts >= 3 → "Too many attempts, wait 5 minutes"
 4. Increment attempts
-5. bcrypt.compare(input_otp, otp_hash)
+5. SHA-256(input_otp + stored_salt) === stored_hash
 6. If match → delete row, issue JWT
 7. If no match → "Incorrect code, try again"
 ```
 
 ### OTP Delivery
 
-| Channel | Provider | Mechanism |
-|---------|----------|-----------|
-| WhatsApp | Twilio WhatsApp API | Use Twilio's WhatsApp channel with approved OTP message template |
-| SMS | Twilio SMS API | Standard Twilio SMS |
+OTP delivery uses a **provider abstraction layer** — the app never calls Twilio (or any vendor) directly. This makes it easy to switch providers without changing application code.
 
-**WhatsApp OTP Template**: Requires a pre-approved template in Twilio/Meta Business Manager (e.g., `Your verification code is {{1}}`). Must be submitted and approved before going live.
+#### Provider Interface
 
-**Delivery fallback**: If WhatsApp delivery fails, automatically send via SMS. If SMS fails, inform user and suggest retry.
+```typescript
+// src/lib/otp/provider.ts
+
+interface DeliveryResult {
+  success: boolean;
+  messageId?: string;
+  error?: string;
+  provider: string;       // which provider handled delivery
+}
+
+interface OTPDeliveryProvider {
+  name: string;           // 'twilio', 'vonage', 'messagebird', etc.
+  sendSMS(phone: string, message: string): Promise<DeliveryResult>;
+  sendWhatsApp(phone: string, message: string): Promise<DeliveryResult>;
+  sendEmail(email: string, subject: string, body: string): Promise<DeliveryResult>;
+  isAvailable(channel: 'sms' | 'whatsapp' | 'email'): boolean;
+}
+```
+
+#### Provider Registry
+
+```typescript
+// src/lib/otp/registry.ts
+
+class OTPProviderRegistry {
+  private providers: Map<string, OTPDeliveryProvider> = new Map();
+
+  register(provider: OTPDeliveryProvider): void;
+  getProvider(channel: 'sms' | 'whatsapp' | 'email'): OTPDeliveryProvider;
+  sendOTP(channel, phone, code): Promise<DeliveryResult>;
+  sendOTPWithFallback(phone, code): Promise<DeliveryResult>;  // WhatsApp → SMS fallback
+}
+```
+
+#### Concrete Implementations
+
+| File | Provider | Channels |
+|------|----------|----------|
+| `src/lib/otp/providers/twilio.ts` | Twilio | SMS + WhatsApp |
+| Future: `src/lib/otp/providers/vonage.ts` | Vonage | SMS + WhatsApp |
+| Future: `src/lib/otp/providers/messagebird.ts` | MessageBird | SMS |
+
+#### Provider Selection
+
+Config-driven via env vars:
+
+```toml
+[vars]
+OTP_PROVIDER_SMS = "twilio"        # which provider handles SMS
+OTP_PROVIDER_WHATSAPP = "twilio"   # which provider handles WhatsApp
+OTP_PROVIDER_EMAIL = "none"        # which provider handles Email (disabled)
+```
+
+#### Adding a New Provider
+
+1. Create `src/lib/otp/providers/<name>.ts` implementing `OTPDeliveryProvider`
+2. Register it in the provider registry init
+3. Update `OTP_PROVIDER_SMS` or `OTP_PROVIDER_WHATSAPP` env var
+4. No other code changes needed
+
+#### Twilio Implementation (Initial)
+
+| Channel | API | Config |
+|---------|-----|--------|
+| SMS | Twilio REST API `POST /2010-04-01/Accounts/{sid}/Messages.json` | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER` |
+| WhatsApp | Twilio REST API with `from: whatsapp:<number>` | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_NUMBER` |
+
+**WhatsApp OTP Template**: Requires pre-approved template in Twilio/Meta Business Manager (e.g., `Your verification code is {{1}}`). Must be submitted and approved before going live.
+
+**Delivery fallback**: `sendOTPWithFallback()` tries WhatsApp first → falls back to SMS if WhatsApp fails.
 
 ---
 
@@ -391,11 +458,15 @@ Existing doctors with Firebase-linked accounts need a migration path:
 
 | File | Action | Purpose |
 |------|--------|---------|
-| `src/lib/auth/phone-otp.ts` | **NEW** | OTP generation (crypto random), bcrypt hashing, verification, JWT issuing |
+| `src/lib/auth/phone-otp.ts` | **NEW** | OTP generation (crypto random), SHA-256 hashing, verification, JWT issuing |
 | `src/lib/auth/rate-limiter.ts` | **NEW** | In-memory sliding window rate limiter |
 | `src/lib/auth/feature-flags.ts` | **NEW** | Feature flag checks for onboarding channels |
 | `src/lib/auth/firebase.ts` | **DEPRECATE** | Replaced by phone-otp; keep for 30-day transition |
 | `src/lib/auth/telegram.ts` | **KEEP** | Still used for Telegram patients |
+| `src/lib/otp/provider.ts` | **NEW** | `OTPDeliveryProvider` interface + `DeliveryResult` type |
+| `src/lib/otp/registry.ts` | **NEW** | `OTPProviderRegistry` — register providers, select by channel, fallback logic |
+| `src/lib/otp/providers/twilio.ts` | **NEW** | Twilio implementation (SMS + WhatsApp) |
+| `src/lib/otp/providers/index.ts` | **NEW** | Registers all providers, exports initialized registry |
 | `src/lib/messaging/router.ts` | **NEW** | Routes messages: checks provider/patient registration, directs to onboarding or appointment bot |
 | `src/lib/messaging/onboarding-flow.ts` | **UPDATE** | Use phone OTP instead of Firebase, add Google Calendar link step, E.164 normalization |
 | `src/lib/messaging/appointment-bot.ts` | **NEW** | Extract appointment commands (/book, /status, /cancel, /availability, /calendar) |
@@ -422,6 +493,9 @@ Existing doctors with Firebase-linked accounts need a migration path:
 ### Add
 | Variable | Purpose | Storage |
 |----------|---------|---------|
+| `OTP_PROVIDER_SMS` | Which provider handles SMS (e.g., "twilio") | wrangler var |
+| `OTP_PROVIDER_WHATSAPP` | Which provider handles WhatsApp (e.g., "twilio") | wrangler var |
+| `OTP_PROVIDER_EMAIL` | Which provider handles Email (e.g., "none") | wrangler var |
 | `TWILIO_ACCOUNT_SID` | Twilio account for SMS/WhatsApp OTP | wrangler secret |
 | `TWILIO_AUTH_TOKEN` | Twilio auth token | wrangler secret |
 | `TWILIO_PHONE_NUMBER` | Twilio SMS sender number | wrangler var |
