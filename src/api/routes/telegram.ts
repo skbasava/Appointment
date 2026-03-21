@@ -14,7 +14,7 @@ function getHandlers(env: Env) {
     pluginManager.register(new TelegramPlugin(env.TELEGRAM_BOT_TOKEN));
   }
   if (!onboardingHandler) {
-    onboardingHandler = new OnboardingFlowHandler(pluginManager, env.DB);
+    onboardingHandler = new OnboardingFlowHandler(pluginManager, env.DB, env as unknown as Record<string, string>);
   }
   return { pluginManager, onboardingHandler };
 }

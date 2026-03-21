@@ -2,6 +2,9 @@
 // Supports Doctor and Patient registration with full data collection
 
 import { PluginManager, MessagingPlugin, IncomingMessage, MessageButton, PlatformType, OnboardingState } from './plugin';
+import { generateOTPSession, verifyOTP } from '../../lib/auth/phone-otp';
+import { normalizePhone } from '../../lib/phone/normalize';
+import { createProviderRegistry } from '../../lib/otp/providers/index';
 
 // Onboarding Steps
 export const DOCTOR_STEPS = {
@@ -9,6 +12,7 @@ export const DOCTOR_STEPS = {
   NAME: 'doctor_name',
   LICENSE: 'doctor_license',
   PHONE: 'doctor_phone',
+  PHONE_VERIFY: 'doctor_phone_verify',
   SPECIALTY: 'doctor_specialty',
   CLINIC_NAME: 'clinic_name',
   CLINIC_ADDRESS: 'clinic_address',
@@ -31,11 +35,23 @@ export const PATIENT_STEPS = {
 
 export class OnboardingFlowHandler {
   private sessions: Map<string, OnboardingState> = new Map();
+  private _registry: ReturnType<typeof createProviderRegistry> | null = null;
+  private baseUrl: string;
 
   constructor(
     private pluginManager: PluginManager,
-    private db: any
-  ) {}
+    private db: any,
+    private env?: Record<string, string>
+  ) {
+    this.baseUrl = env?.BASE_URL || 'https://appoint.satish-aradhya.workers.dev';
+  }
+
+  private get otpRegistry() {
+    if (!this._registry && this.env) {
+      this._registry = createProviderRegistry(this.env);
+    }
+    return this._registry;
+  }
 
   // Get session key
   private getSessionKey(platform: PlatformType, userId: string): string {
@@ -155,9 +171,36 @@ export class OnboardingFlowHandler {
         break;
 
       case DOCTOR_STEPS.PHONE:
-        session.data.phone = text;
+        try {
+          session.data.phone = normalizePhone(text);
+        } catch (e: any) {
+          await plugin.send(message.chatId, { text: `❌ Invalid phone number. Please enter a valid number:` });
+          return;
+        }
+        try {
+          if (this.otpRegistry) {
+            const otp = await generateOTPSession(this.db, session.data.phone, 'sms');
+            await this.otpRegistry.sendOTPWithFallback(session.data.phone, otp);
+          }
+        } catch (e: any) {
+          console.error('OTP send error:', e);
+        }
+        session.step = DOCTOR_STEPS.PHONE_VERIFY;
+        await plugin.send(message.chatId, { text: '🔐 We sent a verification code to your phone. Enter the code:' });
+        break;
+
+      case DOCTOR_STEPS.PHONE_VERIFY:
+        try {
+          if (this.otpRegistry) {
+            await verifyOTP(this.db, session.data.phone, text.trim());
+          }
+        } catch (e: any) {
+          await plugin.send(message.chatId, { text: `❌ ${e.message} Try again:` });
+          return;
+        }
+        session.data.phone_verified = 1;
         session.step = DOCTOR_STEPS.SPECIALTY;
-        await plugin.sendWithButtons(message.chatId, '🏥 Select your specialty:', [
+        await plugin.sendWithButtons(message.chatId, '✅ Phone verified!\n\n🏥 Select your specialty:', [
           [{ text: 'General Physician', callbackData: 'specialty:general' }],
           [{ text: 'Cardiologist', callbackData: 'specialty:cardiology' }],
           [{ text: 'Dermatologist', callbackData: 'specialty:dermatology' }],
@@ -222,7 +265,16 @@ export class OnboardingFlowHandler {
         break;
 
       case PATIENT_STEPS.PHONE:
-        session.data.phone = text !== '/skip' ? text : null;
+        if (text !== '/skip') {
+          try {
+            session.data.phone = normalizePhone(text);
+          } catch (e: any) {
+            await plugin.send(message.chatId, { text: `❌ Invalid phone number. Please enter a valid number (or /skip):` });
+            return;
+          }
+        } else {
+          session.data.phone = null;
+        }
         await this.showPatientConfirmation(message, session, plugin);
         break;
 
@@ -354,15 +406,16 @@ export class OnboardingFlowHandler {
       }
 
       session.step = DOCTOR_STEPS.COMPLETE;
+      const calendarUrl = `${this.baseUrl}/api/providers/${doctorId}/calendar/oauth-url`;
       await plugin.send(message.chatId, {
         text: `✅ <b>Doctor Registration Complete!</b>\n\n` +
               `Welcome Dr. ${name}!\n\n` +
               `Your profile is set up. Patients can now book with you.\n\n` +
               `Default: Mon-Fri 9AM-5PM, 30min consultations\n\n` +
+              `Connect Google Calendar: ${calendarUrl}\n\n` +
               `Commands:\n` +
               `/appointments - View bookings\n` +
-              `/availability - Update schedule\n` +
-              `/calendar - Connect Google Calendar`,
+              `/availability - Update schedule`,
       });
     } catch (error) {
       console.error('Save doctor error:', error);

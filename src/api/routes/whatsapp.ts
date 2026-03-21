@@ -14,7 +14,7 @@ function getHandlers(env: Env) {
     pluginManager.register(new WhatsAppPlugin(env.WHATSAPP_ACCESS_TOKEN, env.WHATSAPP_PHONE_NUMBER_ID));
   }
   if (!onboardingHandler) {
-    onboardingHandler = new OnboardingFlowHandler(pluginManager, env.DB);
+    onboardingHandler = new OnboardingFlowHandler(pluginManager, env.DB, env as unknown as Record<string, string>);
   }
   return { pluginManager, onboardingHandler };
 }
