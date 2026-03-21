@@ -87,7 +87,9 @@ export async function telegramWebhook(c: Context<{ Bindings: Env }>): Promise<Re
         type: message.callbackData ? 'callback' : 'message',
       });
     } else {
-      await oh.handleMessage(message);
+      console.log('Calling onboarding handler for:', message.userId);
+      const result = await oh.handleMessage(message);
+      console.log('Onboarding handler result:', result);
     }
 
     return c.json({ ok: true });

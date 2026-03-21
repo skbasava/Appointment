@@ -32,6 +32,7 @@ export class TelegramPlugin implements MessagingPlugin {
         row.map(btn => ({ text: btn.text, callback_data: btn.callbackData }))
       );
       
+      console.log('TelegramPlugin.sendWithButtons:', { chatId, text: text.substring(0, 50), tokenLen: this.token.length });
       const response = await fetch(`https://api.telegram.org/bot${this.token}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -42,6 +43,8 @@ export class TelegramPlugin implements MessagingPlugin {
           reply_markup: { inline_keyboard: inlineButtons },
         }),
       });
+      const data = await response.json() as any;
+      console.log('TelegramPlugin.sendWithButtons response:', { ok: response.ok, status: response.status, description: data?.description });
       return response.ok;
     } catch (error) {
       console.error('Telegram send buttons error:', error);

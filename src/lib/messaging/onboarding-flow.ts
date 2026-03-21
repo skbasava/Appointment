@@ -149,6 +149,10 @@ export class OnboardingFlowHandler {
       await plugin.send(message.chatId, { text: '🏥 Enter clinic name:' });
     } else if (data === 'clinic:done') {
       await this.showDoctorConfirmation(message, session, plugin);
+    } else if (data.startsWith('specialty:')) {
+      session.data.specialty = data.split(':')[1];
+      session.step = DOCTOR_STEPS.CLINIC_NAME;
+      await plugin.send(message.chatId, { text: '🏥 Enter your clinic name:' });
     }
   }
 
@@ -286,15 +290,17 @@ export class OnboardingFlowHandler {
   // Show welcome message
   private async showWelcome(message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin): Promise<void> {
     session.step = 'role_select';
-    await plugin.sendWithButtons(message.chatId,
-      `👋 Welcome to Appoint!\n\n` +
+    console.log('showWelcome: sending buttons to', message.chatId);
+    const result = await plugin.sendWithButtons(message.chatId,
+      `Welcome to Appoint!\n\n` +
       `Book appointments with healthcare providers easily.\n\n` +
       `Are you a doctor or a patient?`,
       [
-        [{ text: '👨‍⚕️ I\'m a Doctor', callbackData: 'role:doctor' }],
-        [{ text: '👤 I\'m a Patient', callbackData: 'role:patient' }],
+        [{ text: 'I\'m a Doctor', callbackData: 'role:doctor' }],
+        [{ text: 'I\'m a Patient', callbackData: 'role:patient' }],
       ]
     );
+    console.log('showWelcome: sendWithButtons result:', result);
   }
 
   // Start doctor registration

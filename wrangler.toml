@@ -6,10 +6,10 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "appoint-db"
-database_id = "<your-database-id>"
+database_id = "a21cd454-0f34-457d-b3a6-608b184d49ee"
 
 [vars]
-TELEGRAM_BOT_TOKEN = "<your-telegram-bot-token>"
+TELEGRAM_BOT_TOKEN = "8664629995:AAGUWcA5AtwlsxMfkKgwhjivklE3o7udc9E"
 WHATSAPP_ACCESS_TOKEN = "<your-whatsapp-access-token>"
 WHATSAPP_PHONE_NUMBER_ID = "<your-phone-number-id>"
 WHATSAPP_VERIFY_TOKEN = "<your-verify-token>"
@@ -21,14 +21,14 @@ GOOGLE_REDIRECT_URI = "<your-redirect-uri>"
 OTP_PROVIDER_SMS = "twilio"
 OTP_PROVIDER_WHATSAPP = "twilio"
 OTP_PROVIDER_EMAIL = "none"
-TWILIO_PHONE_NUMBER = "<your-twilio-sms-number>"
+TWILIO_PHONE_NUMBER = "+12762462535"
 TWILIO_WHATSAPP_NUMBER = "<your-twilio-whatsapp-number>"
 JWT_EXPIRY = "7d"
 DEFAULT_COUNTRY_CODE = "+91"
 ENABLE_WHATSAPP_ONBOARDING = false
-ENABLE_TELEGRAM_ONBOARDING = false
+ENABLE_TELEGRAM_ONBOARDING = "true"
 WHATSAPP_APP_SECRET = "<your-whatsapp-app-secret>"
-TELEGRAM_WEBHOOK_SECRET = "<your-telegram-webhook-secret>"
+# TELEGRAM_WEBHOOK_SECRET = ""  # set via wrangler secret put when ready
 
 [[triggers]]
 crons = ["0 */6 * * *"]

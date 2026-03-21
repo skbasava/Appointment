@@ -2,7 +2,7 @@ type Channel = 'whatsapp' | 'telegram' | 'web';
 
 export function isOnboardingEnabled(
   channel: Channel,
-  env: Record<string, string>
+  env: Record<string, string | boolean>
 ): boolean {
   if (channel === 'web') return true;
   const flagMap: Record<string, string> = {
@@ -10,5 +10,5 @@ export function isOnboardingEnabled(
     telegram: 'ENABLE_TELEGRAM_ONBOARDING',
   };
   const flag = flagMap[channel];
-  return env[flag] === 'true';
+  return env[flag] === 'true' || env[flag] === true;
 }
