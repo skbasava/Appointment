@@ -4,7 +4,7 @@ import { logger } from 'hono/logger';
 import { Env } from '../db/types';
 import { errorHandler } from './middleware/error';
 import { telegramAuthMiddleware } from '../lib/auth/telegram';
-import { firebaseAuthMiddleware } from '../lib/auth/firebase';
+import { phoneOtpMiddleware } from '../lib/auth/middleware';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -64,38 +64,54 @@ app.put('/api/appointments/:id/cancel', telegramAuthMiddleware, async (c) => {
   return cancelAppointment(c);
 });
 
+// Patient web endpoints (OTP auth)
+app.post('/api/patients/otp/send', async (c) => {
+  const { sendPatientOTP } = await import('./routes/patients');
+  return sendPatientOTP(c);
+});
+
+app.post('/api/patients/otp/verify', async (c) => {
+  const { verifyPatientOTP } = await import('./routes/patients');
+  return verifyPatientOTP(c);
+});
+
+app.get('/api/patients/me', phoneOtpMiddleware, async (c) => {
+  const { getPatientProfile } = await import('./routes/patients');
+  return getPatientProfile(c);
+});
+
 // Provider routes (Firebase auth)
-app.post('/api/providers/register', firebaseAuthMiddleware, async (c) => {
+app.post('/api/providers/register', phoneOtpMiddleware, async (c) => {
   const { registerProvider } = await import('./routes/providers');
   return registerProvider(c);
 });
 
-app.get('/api/providers/:id/services', firebaseAuthMiddleware, async (c) => {
+app.get('/api/providers/:id/services', phoneOtpMiddleware, async (c) => {
   const { listServices } = await import('./routes/providers');
   return listServices(c);
 });
 
-app.post('/api/providers/:id/services', firebaseAuthMiddleware, async (c) => {
+app.post('/api/providers/:id/services', phoneOtpMiddleware, async (c) => {
   const { createService } = await import('./routes/providers');
   return createService(c);
 });
 
-app.post('/api/providers/:id/availability', firebaseAuthMiddleware, async (c) => {
+app.post('/api/providers/:id/availability', phoneOtpMiddleware, async (c) => {
   const { setAvailability } = await import('./routes/providers');
   return setAvailability(c);
 });
 
-app.post('/api/providers/:id/blocked-dates', firebaseAuthMiddleware, async (c) => {
+app.post('/api/providers/:id/blocked-dates', phoneOtpMiddleware, async (c) => {
   const { addBlockedDate } = await import('./routes/providers');
   return addBlockedDate(c);
 });
 
-app.put('/api/appointments/:id/approve', firebaseAuthMiddleware, async (c) => {
+app.put('/api/appointments/:id/approve', phoneOtpMiddleware, async (c) => {
   const { approveAppointment } = await import('./routes/appointments');
   return approveAppointment(c);
 });
 
-app.put('/api/appointments/:id/reject', firebaseAuthMiddleware, async (c) => {
+app.put('/api/appointments/:id/reject', phoneOtpMiddleware, async (c) => {
   const { rejectAppointment } = await import('./routes/appointments');
   return rejectAppointment(c);
 });
@@ -113,27 +129,27 @@ app.get('/api/calendar/callback', async (c) => {
 });
 
 // Calendar routes (Firebase auth)
-app.get('/api/providers/:id/calendar/connect', firebaseAuthMiddleware, async (c) => {
+app.get('/api/providers/:id/calendar/connect', phoneOtpMiddleware, async (c) => {
   const { connectCalendar } = await import('./routes/calendar');
   return connectCalendar(c);
 });
 
-app.get('/api/providers/:id/calendar/status', firebaseAuthMiddleware, async (c) => {
+app.get('/api/providers/:id/calendar/status', phoneOtpMiddleware, async (c) => {
   const { getCalendarStatus } = await import('./routes/calendar');
   return getCalendarStatus(c);
 });
 
-app.get('/api/providers/:id/calendar/list', firebaseAuthMiddleware, async (c) => {
+app.get('/api/providers/:id/calendar/list', phoneOtpMiddleware, async (c) => {
   const { listCalendars } = await import('./routes/calendar');
   return listCalendars(c);
 });
 
-app.post('/api/providers/:id/calendar/select', firebaseAuthMiddleware, async (c) => {
+app.post('/api/providers/:id/calendar/select', phoneOtpMiddleware, async (c) => {
   const { selectCalendar } = await import('./routes/calendar');
   return selectCalendar(c);
 });
 
-app.post('/api/providers/:id/calendar/disconnect', firebaseAuthMiddleware, async (c) => {
+app.post('/api/providers/:id/calendar/disconnect', phoneOtpMiddleware, async (c) => {
   const { disconnectCalendar } = await import('./routes/calendar');
   return disconnectCalendar(c);
 });
