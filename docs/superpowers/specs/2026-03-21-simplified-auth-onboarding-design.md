@@ -26,6 +26,7 @@ Doctors are not tech-savvy. The current flow requires them to obtain Firebase to
 | Onboarding actor | Doctor self-registers | Simplest, self-service |
 | Patient auth | Channel-dependent (Telegram ID or Phone OTP) | Telegram users identified by Telegram ID, WhatsApp/web by phone |
 | Google Calendar | Unchanged OAuth flow | Only middleware changes, not the actual flow |
+| Feature flags | Env-based toggles | WhatsApp onboarding behind flag until subscription ready, Telegram onboarding also flagged |
 
 ---
 
@@ -63,10 +64,10 @@ Doctor/Patient sends message to ONE number (WhatsApp or Telegram)
 
 ### Router Logic
 
-The router checks the user's identity:
-1. **Telegram message** → look up `telegram_id` in `providers` table → if found, route to AppointmentBot. Else look up in `patient_auth` → if found, route to AppointmentBot (patient). Else route to OnboardingBot.
-2. **WhatsApp message** → look up phone number in `providers` table → if found, route to AppointmentBot. Else look up in `patient_auth` → if found, route to AppointmentBot (patient). Else route to OnboardingBot.
-3. **Role switch**: A patient who wants to register as a doctor uses `/register` to enter the OnboardingBot flow. Their patient record is preserved — the new provider record links to the same phone.
+The router checks the user's identity and feature flags:
+1. **Telegram message** → check `ENABLE_TELEGRAM_ONBOARDING` flag → look up `telegram_id` in `providers` or `patient_auth` → if found, route to AppointmentBot. Else if flag enabled, route to OnboardingBot. Else reply "Onboarding not available here, visit [web_url]".
+2. **WhatsApp message** → check `ENABLE_WHATSAPP_ONBOARDING` flag → look up phone number in `providers` or `patient_auth` → if found, route to AppointmentBot. Else if flag enabled, route to OnboardingBot. Else reply "Onboarding not available here, visit [web_url]".
+3. **Role switch**: A patient who wants to register as a doctor uses `/register` to enter the OnboardingBot flow (if channel flag is enabled). Their patient record is preserved — the new provider record links to the same phone.
 
 ### Patient Flow
 
@@ -207,6 +208,58 @@ On each message:
 
 ---
 
+## Feature Flags
+
+Onboarding via messaging channels is gated by feature flags. Web onboarding is always available as the fallback.
+
+### Flags
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `ENABLE_WHATSAPP_ONBOARDING` | `false` | Gates doctor/patient onboarding via WhatsApp |
+| `ENABLE_TELEGRAM_ONBOARDING` | `false` | Gates doctor/patient onboarding via Telegram |
+
+### Behavior
+
+```
+User sends message on WhatsApp/Telegram
+           ↓
+    ┌──────────────────────┐
+    │ Is onboarding enabled │
+    │ for this channel?     │
+    └──────────┬───────────┘
+               ↓
+    ┌──────────┴──────────┐
+    │ YES                 │ NO
+    ↓                     ↓
+ Proceed to          Reply: "Onboarding is not
+ OnboardingBot       available on this channel yet.
+                       Please visit [web_url] to register."
+                      Then route to AppointmentBot only
+                      (if user is already registered)
+```
+
+### Rules
+
+1. **Web onboarding** is always enabled — no flag needed
+2. **Appointment commands** (`/book`, `/status`, `/cancel`, `/availability`) work regardless of flags — flags only gate `/register` and onboarding flow
+3. **Flag off on WhatsApp**: Registered doctors/patients can still use appointment features. New users are directed to web or Telegram (if enabled).
+4. **Flag off on Telegram**: Same logic — existing users unaffected, new users directed to web or WhatsApp (if enabled).
+5. **Both flags off**: Only web onboarding available. All messaging channels only serve existing users.
+
+### Configuration
+
+Flags are set as wrangler environment variables:
+
+```toml
+# wrangler.toml
+[vars]
+ENABLE_WHATSAPP_ONBOARDING = false   # set to true when WhatsApp API is ready
+ENABLE_TELEGRAM_ONBOARDING = false   # set to true when Telegram bot is ready
+```
+
+---
+
 ## Database Changes
 
 ```sql
@@ -340,6 +393,7 @@ Existing doctors with Firebase-linked accounts need a migration path:
 |------|--------|---------|
 | `src/lib/auth/phone-otp.ts` | **NEW** | OTP generation (crypto random), bcrypt hashing, verification, JWT issuing |
 | `src/lib/auth/rate-limiter.ts` | **NEW** | In-memory sliding window rate limiter |
+| `src/lib/auth/feature-flags.ts` | **NEW** | Feature flag checks for onboarding channels |
 | `src/lib/auth/firebase.ts` | **DEPRECATE** | Replaced by phone-otp; keep for 30-day transition |
 | `src/lib/auth/telegram.ts` | **KEEP** | Still used for Telegram patients |
 | `src/lib/messaging/router.ts` | **NEW** | Routes messages: checks provider/patient registration, directs to onboarding or appointment bot |
@@ -376,6 +430,8 @@ Existing doctors with Firebase-linked accounts need a migration path:
 | `JWT_SECRET_PREVIOUS` | Previous JWT secret for rotation (optional) | wrangler secret |
 | `JWT_EXPIRY` | JWT expiry duration (e.g., "7d") | wrangler var |
 | `DEFAULT_COUNTRY_CODE` | Default country code for phone normalization (e.g., "+91") | wrangler var |
+| `ENABLE_WHATSAPP_ONBOARDING` | Gate WhatsApp onboarding (default: false) | wrangler var |
+| `ENABLE_TELEGRAM_ONBOARDING` | Gate Telegram onboarding (default: false) | wrangler var |
 
 ### Keep Unchanged
 - `GOOGLE_CLIENT_ID`
@@ -405,6 +461,7 @@ Existing doctors with Firebase-linked accounts need a migration path:
 | JWT expired | "Session expired. Please verify your phone again." |
 | Google Calendar denied | "Calendar connection required for accepting bookings." |
 | Google token expired | Auto-refresh (existing logic), notify if refresh fails |
+| Onboarding disabled on channel | "Onboarding not available here yet. Visit [web_url] to register." |
 
 ---
 
