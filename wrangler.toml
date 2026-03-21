@@ -13,11 +13,22 @@ TELEGRAM_BOT_TOKEN = "<your-telegram-bot-token>"
 WHATSAPP_ACCESS_TOKEN = "<your-whatsapp-access-token>"
 WHATSAPP_PHONE_NUMBER_ID = "<your-phone-number-id>"
 WHATSAPP_VERIFY_TOKEN = "<your-verify-token>"
-FIREBASE_API_KEY = "<your-firebase-api-key>"
-FIREBASE_PROJECT_ID = "<your-firebase-project-id>"
 GOOGLE_CLIENT_ID = "<your-google-client-id>"
 GOOGLE_CLIENT_SECRET = "<your-google-client-secret>"
 GOOGLE_REDIRECT_URI = "<your-redirect-uri>"
+
+# OTP Providers
+OTP_PROVIDER_SMS = "twilio"
+OTP_PROVIDER_WHATSAPP = "twilio"
+OTP_PROVIDER_EMAIL = "none"
+TWILIO_PHONE_NUMBER = "<your-twilio-sms-number>"
+TWILIO_WHATSAPP_NUMBER = "<your-twilio-whatsapp-number>"
+JWT_EXPIRY = "7d"
+DEFAULT_COUNTRY_CODE = "+91"
+ENABLE_WHATSAPP_ONBOARDING = false
+ENABLE_TELEGRAM_ONBOARDING = false
+WHATSAPP_APP_SECRET = "<your-whatsapp-app-secret>"
+TELEGRAM_WEBHOOK_SECRET = "<your-telegram-webhook-secret>"
 
 [[triggers]]
 crons = ["0 */6 * * *"]
