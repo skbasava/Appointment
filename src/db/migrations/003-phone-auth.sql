@@ -1,10 +1,7 @@
 -- Migration 003: Phone-based authentication
 -- Adds phone auth columns and tables to replace Firebase auth
 
--- Add phone auth columns to providers
--- NOTE: phone column already exists in schema.sql, so this ALTER will fail on D1/SQLite.
--- Kept for idempotency in dev; remove this line before production runs on existing DBs.
-ALTER TABLE providers ADD COLUMN phone TEXT;
+-- Add phone_verified column to providers (phone column already exists in schema.sql)
 ALTER TABLE providers ADD COLUMN phone_verified INTEGER DEFAULT 0;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_providers_phone ON providers(phone) WHERE phone IS NOT NULL;
 
