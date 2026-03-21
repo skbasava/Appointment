@@ -77,43 +77,43 @@ app.post('/api/patients/otp/verify', async (c) => {
 
 app.get('/api/patients/me', phoneOtpMiddleware, async (c) => {
   const { getPatientProfile } = await import('./routes/patients');
-  return getPatientProfile(c);
+  return getPatientProfile(c as any);
 });
 
-// Provider routes (Firebase auth)
+// Provider routes (OTP auth)
 app.post('/api/providers/register', phoneOtpMiddleware, async (c) => {
   const { registerProvider } = await import('./routes/providers');
-  return registerProvider(c);
+  return registerProvider(c as any);
 });
 
 app.get('/api/providers/:id/services', phoneOtpMiddleware, async (c) => {
   const { listServices } = await import('./routes/providers');
-  return listServices(c);
+  return listServices(c as any);
 });
 
 app.post('/api/providers/:id/services', phoneOtpMiddleware, async (c) => {
   const { createService } = await import('./routes/providers');
-  return createService(c);
+  return createService(c as any);
 });
 
 app.post('/api/providers/:id/availability', phoneOtpMiddleware, async (c) => {
   const { setAvailability } = await import('./routes/providers');
-  return setAvailability(c);
+  return setAvailability(c as any);
 });
 
 app.post('/api/providers/:id/blocked-dates', phoneOtpMiddleware, async (c) => {
   const { addBlockedDate } = await import('./routes/providers');
-  return addBlockedDate(c);
+  return addBlockedDate(c as any);
 });
 
 app.put('/api/appointments/:id/approve', phoneOtpMiddleware, async (c) => {
   const { approveAppointment } = await import('./routes/appointments');
-  return approveAppointment(c);
+  return approveAppointment(c as any);
 });
 
 app.put('/api/appointments/:id/reject', phoneOtpMiddleware, async (c) => {
   const { rejectAppointment } = await import('./routes/appointments');
-  return rejectAppointment(c);
+  return rejectAppointment(c as any);
 });
 
 // Calendar routes (public)
@@ -128,30 +128,30 @@ app.get('/api/calendar/callback', async (c) => {
   return calendarCallback(c);
 });
 
-// Calendar routes (Firebase auth)
+// Calendar routes (OTP auth)
 app.get('/api/providers/:id/calendar/connect', phoneOtpMiddleware, async (c) => {
   const { connectCalendar } = await import('./routes/calendar');
-  return connectCalendar(c);
+  return connectCalendar(c as any);
 });
 
 app.get('/api/providers/:id/calendar/status', phoneOtpMiddleware, async (c) => {
   const { getCalendarStatus } = await import('./routes/calendar');
-  return getCalendarStatus(c);
+  return getCalendarStatus(c as any);
 });
 
 app.get('/api/providers/:id/calendar/list', phoneOtpMiddleware, async (c) => {
   const { listCalendars } = await import('./routes/calendar');
-  return listCalendars(c);
+  return listCalendars(c as any);
 });
 
 app.post('/api/providers/:id/calendar/select', phoneOtpMiddleware, async (c) => {
   const { selectCalendar } = await import('./routes/calendar');
-  return selectCalendar(c);
+  return selectCalendar(c as any);
 });
 
 app.post('/api/providers/:id/calendar/disconnect', phoneOtpMiddleware, async (c) => {
   const { disconnectCalendar } = await import('./routes/calendar');
-  return disconnectCalendar(c);
+  return disconnectCalendar(c as any);
 });
 
 // Static UI routes

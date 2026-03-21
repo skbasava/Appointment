@@ -5,7 +5,10 @@ import { ValidationError } from '../middleware/error';
 import { getProviderById, createProvider } from '../../db/queries/providers';
 import { getServicesByProvider, createService } from '../../db/queries/services';
 import { getAvailabilityByProvider, createAvailabilityWindow, createBlockedDate } from '../../db/queries/availability';
-import { getFirebaseUser } from '../../lib/auth/firebase';
+
+function authUserId(c: Context<{ Bindings: Env }>): string {
+  return (c as any).get('userId');
+}
 
 export async function getAvailableSlots(c: Context<{ Bindings: Env }>): Promise<Response> {
   const providerId = c.req.param('id');
@@ -36,7 +39,7 @@ export async function getAvailableSlots(c: Context<{ Bindings: Env }>): Promise<
 }
 
 export async function registerProvider(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const firebaseUser = getFirebaseUser(c);
+  const userId = authUserId(c);
   const body = await c.req.json();
 
   const { type, name, email, phone, timezone } = body;
@@ -55,7 +58,7 @@ export async function registerProvider(c: Context<{ Bindings: Env }>): Promise<R
     name,
     email,
     phone: phone || null,
-    firebase_uid: firebaseUser.uid,
+    firebase_uid: userId,
     timezone: timezone || 'UTC',
     status: 'pending' as const,
   };

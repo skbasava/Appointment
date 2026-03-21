@@ -2,8 +2,11 @@ import { Context } from 'hono';
 import { Env, CalendarConnection } from '../../db/types';
 import { getCalendarConnectionByProvider, upsertCalendarConnection, updateCalendarStatus } from '../../db/queries/calendar';
 import { ValidationError, NotFoundError } from '../middleware/error';
-import { getProvider } from '../../lib/auth/firebase';
 import { GoogleCalendarClient, refreshAccessToken } from '../../lib/calendar/client';
+
+function authUserId(c: Context<{ Bindings: Env }>): string {
+  return (c as any).get('userId');
+}
 
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -94,13 +97,13 @@ export async function calendarCallback(c: Context<{ Bindings: Env }>): Promise<R
 }
 
 export async function getCalendarStatus(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const provider = getProvider(c);
-  if (!provider) {
-    throw new ValidationError('Provider not found');
+  const userId = authUserId(c);
+  if (!userId) {
+    throw new ValidationError('Not authenticated');
   }
 
   const providerId = c.req.param('id');
-  if (provider.id !== providerId) {
+  if (userId !== providerId) {
     throw new ValidationError('You can only view your own calendar status');
   }
 
@@ -119,13 +122,13 @@ export async function getCalendarStatus(c: Context<{ Bindings: Env }>): Promise<
 }
 
 export async function listCalendars(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const provider = getProvider(c);
-  if (!provider) {
-    throw new ValidationError('Provider not found');
+  const userId = authUserId(c);
+  if (!userId) {
+    throw new ValidationError('Not authenticated');
   }
 
   const providerId = c.req.param('id');
-  if (provider.id !== providerId) {
+  if (userId !== providerId) {
     throw new ValidationError('You can only view your own calendars');
   }
 
@@ -162,13 +165,13 @@ export async function listCalendars(c: Context<{ Bindings: Env }>): Promise<Resp
 }
 
 export async function selectCalendar(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const provider = getProvider(c);
-  if (!provider) {
-    throw new ValidationError('Provider not found');
+  const userId = authUserId(c);
+  if (!userId) {
+    throw new ValidationError('Not authenticated');
   }
 
   const providerId = c.req.param('id');
-  if (provider.id !== providerId) {
+  if (userId !== providerId) {
     throw new ValidationError('You can only update your own calendar');
   }
 
@@ -198,13 +201,13 @@ export async function selectCalendar(c: Context<{ Bindings: Env }>): Promise<Res
 }
 
 export async function disconnectCalendar(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const provider = getProvider(c);
-  if (!provider) {
-    throw new ValidationError('Provider not found');
+  const userId = authUserId(c);
+  if (!userId) {
+    throw new ValidationError('Not authenticated');
   }
 
   const providerId = c.req.param('id');
-  if (provider.id !== providerId) {
+  if (userId !== providerId) {
     throw new ValidationError('You can only disconnect your own calendar');
   }
 
