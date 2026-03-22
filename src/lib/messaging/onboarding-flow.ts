@@ -3,11 +3,9 @@
 
 import { PluginManager, MessagingPlugin, IncomingMessage, MessageButton, PlatformType, OnboardingState } from './plugin';
 import { generateOTPSession, verifyOTP } from '../../lib/auth/phone-otp';
-import { generateTOTPSecret, generateTOTP, verifyTOTP } from '../../lib/auth/totp';
+import { generateTOTPSecret, verifyTOTP } from '../../lib/auth/totp';
 import { normalizePhone } from '../../lib/phone/normalize';
 import { createProviderRegistry } from '../../lib/otp/providers/index';
-import { sendFirebaseVerificationCode, verifyFirebaseCode } from '../../lib/auth/firebase-phone';
-import { isTwilioOTPEnabled } from '../../lib/auth/feature-flags';
 
 // Onboarding Steps
 export const DOCTOR_STEPS = {
@@ -157,6 +155,12 @@ export class OnboardingFlowHandler {
       session.data.specialty = data.split(':')[1];
       session.step = DOCTOR_STEPS.CLINIC_NAME;
       await plugin.send(message.chatId, { text: '🏥 Enter your clinic name:' });
+    } else if (data.startsWith('apt:approve:')) {
+      const aptId = data.split(':')[2];
+      await this.handleAppointmentAction(message, session, plugin, aptId, 'confirmed');
+    } else if (data.startsWith('apt:reject:')) {
+      const aptId = data.split(':')[2];
+      await this.handleAppointmentAction(message, session, plugin, aptId, 'cancelled');
     }
   }
 
@@ -292,57 +296,28 @@ export class OnboardingFlowHandler {
           await plugin.send(message.chatId, { text: `❌ Invalid phone number. Please enter a valid number:` });
           return;
         }
-
-        if (isTwilioOTPEnabled(this.env as any)) {
-          // Twilio OTP path (existing)
-          try {
-            if (this.otpRegistry) {
-              const otp = await generateOTPSession(this.db, session.data.phone, 'sms');
-              await this.otpRegistry.sendOTPWithFallback(session.data.phone, otp);
-            }
-          } catch (e: any) {
-            console.error('OTP send error:', e);
+        try {
+          if (this.otpRegistry) {
+            const otp = await generateOTPSession(this.db, session.data.phone, 'sms');
+            await this.otpRegistry.sendOTPWithFallback(session.data.phone, otp);
           }
-          session.step = PATIENT_STEPS.PHONE_VERIFY;
-          await plugin.send(message.chatId, { text: '🔐 We sent a verification code to your phone. Enter the code:' });
-        } else {
-          // Firebase Phone Auth path (new)
-          try {
-            const sessionInfo = await sendFirebaseVerificationCode(session.data.phone, this.env as any);
-            session.data.firebaseSessionInfo = sessionInfo;
-          } catch (e: any) {
-            console.error('Firebase send error:', e);
-            await plugin.send(message.chatId, { text: '❌ Failed to send verification code. Please try again:' });
-            return;
-          }
-          session.step = PATIENT_STEPS.PHONE_VERIFY;
-          await plugin.send(message.chatId, { text: '🔐 We sent a verification code to your phone via Firebase. Enter the code:' });
+        } catch (e: any) {
+          console.error('OTP send error:', e);
         }
+        session.step = PATIENT_STEPS.PHONE_VERIFY;
+        await plugin.send(message.chatId, { text: '🔐 We sent a verification code to your phone. Enter the code:' });
         break;
 
       case PATIENT_STEPS.PHONE_VERIFY:
-        if (isTwilioOTPEnabled(this.env as any)) {
-          // Twilio OTP verification
-          try {
-            if (this.otpRegistry) {
-              await verifyOTP(this.db, session.data.phone, text.trim());
-            }
-          } catch (e: any) {
-            await plugin.send(message.chatId, { text: `❌ ${e.message} Try again:` });
-            return;
+        try {
+          if (this.otpRegistry) {
+            await verifyOTP(this.db, session.data.phone, text.trim());
           }
-          session.data.phone_verified = 1;
-        } else {
-          // Firebase verification
-          try {
-            const result = await verifyFirebaseCode(session.data.firebaseSessionInfo, text.trim(), this.env as any);
-            session.data.firebase_uid = result.phoneNumber || session.data.phone;
-            session.data.phone_verified = 1;
-          } catch (e: any) {
-            await plugin.send(message.chatId, { text: `❌ ${e.message} Try again:` });
-            return;
-          }
+        } catch (e: any) {
+          await plugin.send(message.chatId, { text: `❌ ${e.message} Try again:` });
+          return;
         }
+        session.data.phone_verified = 1;
         session.step = PATIENT_STEPS.CONFIRM;
         await plugin.send(message.chatId, { text: '✅ Phone verified!' });
         await this.showPatientConfirmation(message, session, plugin);
@@ -404,7 +379,6 @@ export class OnboardingFlowHandler {
     await plugin.sendWithButtons(message.chatId,
       `📋 <b>Confirm Doctor Details</b>\n\n` +
       `👨‍⚕️ Name: ${name}\n` +
-      `🆔 License: ${licenseNumber}\n` +
       `📱 Phone: ${phone}\n` +
       `💬 Platform: ${session.platform}` +
       clinicsText,
@@ -442,13 +416,12 @@ export class OnboardingFlowHandler {
 
       // Insert doctor
       await this.db.prepare(
-        `INSERT INTO providers (id, type, name, license_number, mobile_number, telegram_id, whatsapp_id, totp_secret, totp_enabled, timezone, status, created_at, updated_at)
+        `INSERT INTO providers (id, type, name, email, phone, totp_secret, totp_enabled, platform, platform_user_id, timezone, status, created_at, updated_at)
          VALUES (?, 'doctor', ?, ?, ?, ?, ?, ?, ?, 'UTC', 'active', ?, ?)`
       ).bind(
-        doctorId, name, licenseNumber, phone,
-        session.platform === 'telegram' ? session.platformUserId : null,
-        session.platform === 'whatsapp' ? session.platformUserId : null,
+        doctorId, name, session.data.email || null, phone,
         session.data.totpSecret || null, session.data.totp_enabled || 0,
+        session.platform || null, session.platformUserId || null,
         Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000)
       ).run();
 
@@ -547,9 +520,97 @@ export class OnboardingFlowHandler {
 
   // Show appointments
   private async showAppointments(message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin): Promise<void> {
-    await plugin.send(message.chatId, {
-      text: '📋 Appointments\n\nView your appointments at:\nhttps://appoint.satish-aradhya.workers.dev/appointments',
-    });
+    // Check if this user is a doctor
+    const doctor = await this.db.prepare(
+      'SELECT id, name FROM providers WHERE id IN (SELECT id FROM providers) AND id = ?'
+    ).bind(message.userId).first() as any;
+
+    // Try to find doctor by telegram_id
+    const doctorByTg = await this.db.prepare(
+      'SELECT id, name FROM providers WHERE id = ?'
+    ).bind(session.platformUserId).first() as { id: string; name: string } | null;
+
+    if (doctorByTg) {
+      // Doctor view - show their appointments
+      const appointments = await this.db.prepare(
+        `SELECT a.id, a.customer_name, a.start_time, a.end_time, a.status, s.name as service_name
+         FROM appointments a
+         JOIN services s ON a.service_id = s.id
+         WHERE a.provider_id = ?
+         ORDER BY a.start_time DESC
+         LIMIT 10`
+      ).bind(doctorByTg.id).all() as any;
+
+      if (!appointments.results || appointments.results.length === 0) {
+        await plugin.send(message.chatId, { text: '📋 No appointments yet. Patients will book with you once your profile is active.' });
+        return;
+      }
+
+      let text = `📋 <b>Your Appointments</b>\n\n`;
+      for (const apt of appointments.results) {
+        const date = new Date(apt.start_time * 1000);
+        const dateStr = date.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+        const timeStr = date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+        const statusEmoji = apt.status === 'confirmed' ? '✅' : apt.status === 'pending' ? '⏳' : apt.status === 'cancelled' ? '❌' : '🔄';
+        text += `${statusEmoji} <b>${apt.customer_name}</b>\n`;
+        text += `   ${apt.service_name} — ${dateStr} ${timeStr}\n`;
+        text += `   Status: ${apt.status}\n\n`;
+      }
+
+      // Show buttons for pending appointments
+      const pendingApts = appointments.results.filter((a: any) => a.status === 'pending');
+      if (pendingApts.length > 0) {
+        const buttons = pendingApts.map((apt: any) => [
+          { text: `✅ Approve ${apt.customer_name}`, callbackData: `apt:approve:${apt.id}` },
+          { text: `❌ Reject`, callbackData: `apt:reject:${apt.id}` },
+        ]);
+        await plugin.sendWithButtons(message.chatId, text, buttons);
+      } else {
+        await plugin.send(message.chatId, { text });
+      }
+    } else {
+      // Patient view - show link
+      await plugin.send(message.chatId, {
+        text: '📋 Appointments\n\nView your appointments at:\nhttps://appoint.satish-aradhya.workers.dev/appointments',
+      });
+    }
+  }
+
+  // Handle appointment approve/reject
+  private async handleAppointmentAction(
+    message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin,
+    appointmentId: string, newStatus: 'confirmed' | 'cancelled'
+  ): Promise<void> {
+    // Verify doctor owns this appointment
+    const doctor = await this.db.prepare(
+      'SELECT id FROM providers WHERE id = ?'
+    ).bind(session.platformUserId).first() as { id: string } | null;
+
+    if (!doctor) {
+      await plugin.send(message.chatId, { text: '❌ Doctor profile not found.' });
+      return;
+    }
+
+    const appointment = await this.db.prepare(
+      'SELECT * FROM appointments WHERE id = ? AND provider_id = ?'
+    ).bind(appointmentId, doctor.id).first() as any;
+
+    if (!appointment) {
+      await plugin.send(message.chatId, { text: '❌ Appointment not found.' });
+      return;
+    }
+
+    if (appointment.status !== 'pending') {
+      await plugin.send(message.chatId, { text: `ℹ️ Appointment already ${appointment.status}.` });
+      return;
+    }
+
+    await this.db.prepare('UPDATE appointments SET status = ?, updated_at = ? WHERE id = ?')
+      .bind(newStatus, Math.floor(Date.now() / 1000), appointmentId).run();
+
+    const emoji = newStatus === 'confirmed' ? '✅' : '❌';
+    const action = newStatus === 'confirmed' ? 'approved' : 'rejected';
+    await plugin.send(message.chatId, { text: `${emoji} Appointment ${action} for ${appointment.customer_name}.` });
   }
 
   // Show help

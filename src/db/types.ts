@@ -7,6 +7,8 @@ export interface Provider {
   firebase_uid: string;
   timezone: string;
   status: 'pending' | 'verified' | 'active' | 'suspended';
+  platform?: string;
+  platform_user_id?: string;
   created_at: number;
   updated_at: number;
 }

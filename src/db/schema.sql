@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS providers (
   email TEXT UNIQUE NOT NULL,
   phone TEXT,
   firebase_uid TEXT UNIQUE NOT NULL,
+  platform TEXT,
+  platform_user_id TEXT,
   timezone TEXT NOT NULL DEFAULT 'UTC',
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'verified', 'active', 'suspended')),
   created_at INTEGER NOT NULL,
