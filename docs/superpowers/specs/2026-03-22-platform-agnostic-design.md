@@ -100,23 +100,25 @@ export function createDb(driver: 'd1' | 'sqlite' | 'postgres', binding?: D1Datab
 | `src/db/queries/*.ts` (9 files) | Rewrite to Drizzle query builder |
 | `src/db/queries/otp.ts` | Remove `import type { D1Database }` |
 | `src/db/queries/patient-auth.ts` | Remove `import type { D1Database }` |
-| `src/api/routes/appointments.ts` | Remove raw `c.env.DB.prepare()` calls (lines 88, 113, 137) |
-| `src/api/cron/reminders.ts` | Remove raw `env.DB.prepare()` call (line 17) |
+| `src/api/routes/appointments.ts` | Remove raw `c.env.DB.prepare()` calls (lines 88, 113, 137), use query layer |
+| `src/api/routes/whatsapp.ts` | Remove raw `c.env.DB.prepare()` calls (lines 73, 76), use query layer |
+| `src/api/routes/patients.ts` | Remove raw `c.env.DB.prepare()` call (line 58), use query layer |
+| `src/api/cron/reminders.ts` | Remove raw `env.DB.prepare()` call (line 17), use query layer |
 
 ## Section 2: Entry Points
 
 ### Shared App Factory (`src/api/app.ts`)
 
 ```ts
-export function createApp(db: Database) {
+export function createApp(db: Database, config: Config) {
   const app = new Hono();
-  app.use('*', injectDb(db));  // DB available via c.get('db')
+  app.use('*', injectContext(db, config));  // DB + config available via c.get('db') and c.get('config')
   // ... register all routes ...
   return app;
 }
 ```
 
-Routes use `c.get('db')` instead of `c.env.DB`. No platform types in route code.
+Routes use `c.get('db')` and `c.get('config')` instead of `c.env.DB` and `c.env.*`. No platform types in route code. All 48+ `c.env.*` config references in routes must be replaced with `c.get('config').section.field` (e.g., `c.env.TELEGRAM_BOT_TOKEN` → `c.get('config').telegram.botToken`).
 
 ### Node.js Entry (`src/api/index.ts`)
 
@@ -124,9 +126,11 @@ Routes use `c.get('db')` instead of `c.env.DB`. No platform types in route code.
 import { serve } from '@hono/node-server';
 import { createApp } from './app';
 import { createDb } from '../db/client';
+import { loadConfig } from '../config';
 
-const db = createDb(process.env.DB_DRIVER as any);
-const app = createApp(db);
+const config = loadConfig();
+const db = createDb(config.db.driver);
+const app = createApp(db, config);
 serve({ fetch: app.fetch, port: parseInt(process.env.PORT || '3000') });
 ```
 
@@ -135,13 +139,16 @@ serve({ fetch: app.fetch, port: parseInt(process.env.PORT || '3000') });
 ```ts
 import { createApp } from './app';
 import { createDb } from '../db/client';
+import { loadConfigFromEnv } from '../config';
 
 export default {
   fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    const config = loadConfigFromEnv(env);
     const db = createDb('d1', env.DB);
-    return createApp(db).fetch(request, env, ctx);
+    return createApp(db, config).fetch(request, env, ctx);
   },
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    const config = loadConfigFromEnv(env);
     const db = createDb('d1', env.DB);
     // delegate to Cloudflare scheduler provider
   }
@@ -210,7 +217,11 @@ export interface Config {
 export function loadConfig(): Config  // reads from process.env or CF env
 ```
 
-Routes and services receive `Config` instead of `Env`. No `D1Database` in the config interface.
+Routes and services access config via `c.get('config')` instead of `c.env.*`. No `D1Database` in the config interface.
+
+Two loader variants:
+- `loadConfig()` — reads from `process.env` (Node.js)
+- `loadConfigFromEnv(env: Env)` — reads from Cloudflare `Env` binding
 
 ## Section 5: Dependencies
 
@@ -222,16 +233,17 @@ Routes and services receive `Config` instead of `Env`. No `D1Database` in the co
 | `drizzle-kit` | Schema migrations |
 | `better-sqlite3` | SQLite driver (Node.js) |
 | `@hono/node-server` | Hono Node.js adapter |
-| `bullmq` | Job queue (Node.js) |
-| `ioredis` | Redis client for BullMQ |
+| `node-cron` | Default scheduler for self-hosted (zero dependencies) |
 | `dotenv` | Environment variable loading |
-| `pg` (optional) | Postgres driver |
+| `bullmq` (optional) | Job queue — only if using `bullmq` scheduler provider |
+| `ioredis` (optional) | Redis client — only alongside BullMQ |
+| `pg` (optional) | Postgres driver — only if using Postgres |
 
 ### Remove
 
 | Package | Reason |
 |---------|--------|
-| `@cloudflare/workers-types` | No longer needed in shared code |
+| `@cloudflare/workers-types` | Move to optional peer dep (still needed by `worker.ts` CF types) |
 | `wrangler` (from devDeps) | Move to optional / CF-specific workspace |
 
 ### Keep
@@ -246,12 +258,24 @@ Routes and services receive `Config` instead of `Env`. No `D1Database` in the co
 | Platform | DB Driver | Scheduler | Entry Point | Command |
 |----------|-----------|-----------|-------------|---------|
 | Cloudflare Workers | `d1` | `cloudflare` | `worker.ts` | `wrangler deploy` |
-| Docker / self-hosted | `sqlite` or `postgres` | `bullmq` | `index.ts` | `docker compose up` |
+| Docker / self-hosted (simple) | `sqlite` | `node-cron` | `index.ts` | `docker compose up` |
+| Docker / self-hosted (production) | `postgres` | `bullmq` | `index.ts` | `docker compose up` |
 | AWS ECS / Lambda | `postgres` | `bullmq` | `index.ts` | Container deploy |
 | GCP Cloud Run | `postgres` | `bullmq` | `index.ts` | Container deploy |
 
 ### Docker Compose
 
+Minimal (sqlite + node-cron, zero external services):
+```yaml
+services:
+  app:
+    build: .
+    ports: ["3000:3000"]
+    env_file: .env
+    volumes: [./data:/app/data]
+```
+
+Production (postgres + bullmq + redis):
 ```yaml
 services:
   app:
