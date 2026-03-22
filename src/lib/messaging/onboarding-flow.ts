@@ -161,9 +161,18 @@ export class OnboardingFlowHandler {
     } else if (data.startsWith('apt:reject:')) {
       const aptId = data.split(':')[2];
       await this.handleAppointmentAction(message, session, plugin, aptId, 'cancelled');
+    } else if (data.startsWith('apt:reschedule:')) {
+      const aptId = data.split(':')[2];
+      await this.showRescheduleOptions(message, session, plugin, aptId);
     } else if (data.startsWith('book:doctor:')) {
       const doctorId = data.split(':')[2];
       await this.showDoctorServices(message, session, plugin, doctorId);
+    } else if (data.startsWith('book:service:')) {
+      const serviceId = data.split(':')[2];
+      await this.showAvailableDates(message, session, plugin, serviceId);
+    } else if (data.startsWith('book:slot:')) {
+      const [, , serviceId, epoch] = data.split(':');
+      await this.createBooking(message, session, plugin, serviceId, parseInt(epoch));
     }
   }
 
@@ -552,6 +561,134 @@ export class OnboardingFlowHandler {
     await plugin.sendWithButtons(message.chatId, `📅 <b>${doctor.name}</b>\nSelect a service:`, buttons);
   }
 
+  private async showAvailableDates(
+    message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin, serviceId: string
+  ): Promise<void> {
+    const doctorId = session.data.bookDoctorId;
+    const windows = await this.db.prepare(
+      'SELECT day_of_week, start_time, end_time FROM availability_windows WHERE provider_id = ? AND is_active = 1'
+    ).bind(doctorId).all();
+
+    if (!windows.results || windows.results.length === 0) {
+      await plugin.send(message.chatId, { text: '📅 No availability set.' }); return;
+    }
+
+    const buttons: MessageButton[][] = [];
+    const now = new Date();
+    for (let d = 0; d < 7; d++) {
+      const date = new Date(now);
+      date.setDate(date.getDate() + d);
+      const dayOfWeek = date.getDay();
+      const matchingWindows = (windows.results as any[]).filter(w => w.day_of_week === dayOfWeek);
+      if (matchingWindows.length === 0) continue;
+
+      for (const w of matchingWindows) {
+        const [startH, startM] = w.start_time.split(':').map(Number);
+        const [endH, endM] = w.end_time.split(':').map(Number);
+        for (let h = startH; h < endH; h++) {
+          for (let m = 0; m < 60; m += 30) {
+            if (h === startH && m < startM) continue;
+            if (h === endH && m >= endM) continue;
+            const dateStr = date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+            const timeStr = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+            const epoch = Math.floor(new Date(date.getFullYear(), date.getMonth(), date.getDate(), h, m).getTime() / 1000);
+            buttons.push([{ text: `${dateStr} ${timeStr}`, callbackData: `book:slot:${serviceId}:${epoch}` }]);
+          }
+        }
+      }
+    }
+
+    if (buttons.length === 0) {
+      await plugin.send(message.chatId, { text: '📅 No slots available in the next 7 days.' }); return;
+    }
+
+    session.data.bookServiceId = serviceId;
+    await plugin.sendWithButtons(message.chatId, '📅 <b>Pick a time slot:</b>', buttons.slice(0, 20));
+  }
+
+  private async createBooking(
+    message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin,
+    serviceId: string, startTime: number
+  ): Promise<void> {
+    const doctorId = session.data.bookDoctorId;
+    const customerName = session.data.name || 'Patient';
+
+    const service = await this.db.prepare(
+      'SELECT name, duration_minutes FROM services WHERE id = ?'
+    ).bind(serviceId).first() as any;
+
+    if (!service) { await plugin.send(message.chatId, { text: '❌ Service not found.' }); return; }
+
+    const endTime = startTime + service.duration_minutes * 60;
+
+    const conflicts = await this.db.prepare(
+      'SELECT id FROM appointments WHERE provider_id = ? AND status != ? AND start_time < ? AND end_time > ?'
+    ).bind(doctorId, 'cancelled', endTime, startTime).all();
+
+    if (conflicts.results && conflicts.results.length > 0) {
+      await plugin.send(message.chatId, { text: '❌ That slot is no longer available. Please pick another.' }); return;
+    }
+
+    const dateStr = new Date(startTime * 1000).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+    const timeStr = new Date(startTime * 1000).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+
+    // Handle reschedule
+    if (session.data.rescheduleAptId) {
+      const rescheduleAptId = session.data.rescheduleAptId;
+
+      const oldApt = await this.db.prepare(
+        'SELECT customer_telegram_id, customer_name FROM appointments WHERE id = ?'
+      ).bind(rescheduleAptId).first() as any;
+
+      await this.db.prepare(
+        'UPDATE appointments SET start_time = ?, end_time = ?, status = ?, updated_at = ? WHERE id = ?'
+      ).bind(startTime, endTime, 'confirmed', Math.floor(Date.now() / 1000), rescheduleAptId).run();
+
+      await plugin.send(message.chatId, {
+        text: `✅ Appointment rescheduled!\n\n📅 ${dateStr} ${timeStr}\n👤 ${oldApt?.customer_name || customerName}`,
+      });
+
+      // Notify patient of reschedule
+      if (oldApt?.customer_telegram_id) {
+        const patientMsg = `🔄 Your appointment has been rescheduled!\n📅 New time: ${dateStr} ${timeStr}`;
+        await plugin.send(String(oldApt.customer_telegram_id), { text: patientMsg });
+      }
+
+      delete session.data.rescheduleAptId;
+      return;
+    }
+
+    // Normal booking flow
+    const aptId = crypto.randomUUID();
+    await this.db.prepare(
+      `INSERT INTO appointments (id, provider_id, service_id, customer_name, customer_telegram_id, start_time, end_time, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`
+    ).bind(aptId, doctorId, serviceId, customerName, session.platformUserId, startTime, endTime,
+      Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000)).run();
+
+    await plugin.send(message.chatId, {
+      text: `✅ Booking requested!\n\n📅 ${dateStr} ${timeStr}\n👨‍⚕️ ${service.name}\n\nWaiting for doctor confirmation...`,
+    });
+
+    const doctor = await this.db.prepare(
+      'SELECT platform, platform_user_id FROM providers WHERE id = ?'
+    ).bind(doctorId).first() as any;
+
+    if (doctor?.platform && doctor?.platform_user_id) {
+      const doctorPlugin = this.pluginManager.get(doctor.platform as PlatformType);
+      if (doctorPlugin) {
+        await doctorPlugin.sendWithButtons(doctor.platform_user_id,
+          `📋 <b>New Booking Request</b>\n\n👤 ${customerName}\n🏥 ${service.name}\n📅 ${dateStr} ${timeStr}`,
+          [
+            [{ text: '✅ Approve', callbackData: `apt:approve:${aptId}` }],
+            [{ text: '❌ Reject', callbackData: `apt:reject:${aptId}` }],
+            [{ text: '🔄 Reschedule', callbackData: `apt:reschedule:${aptId}` }],
+          ]
+        );
+      }
+    }
+  }
+
   // Show appointments
   private async showAppointments(message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin): Promise<void> {
     // Check if this user is a doctor
@@ -645,6 +782,44 @@ export class OnboardingFlowHandler {
     const emoji = newStatus === 'confirmed' ? '✅' : '❌';
     const action = newStatus === 'confirmed' ? 'approved' : 'rejected';
     await plugin.send(message.chatId, { text: `${emoji} Appointment ${action} for ${appointment.customer_name}.` });
+
+    // Notify patient
+    if (appointment.customer_telegram_id) {
+      const dateStr = new Date(appointment.start_time * 1000).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+      const timeStr = new Date(appointment.start_time * 1000).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+      const msg = newStatus === 'confirmed'
+        ? `✅ Your appointment is confirmed!\n📅 ${dateStr} ${timeStr}`
+        : `❌ Your appointment was declined.\n📅 ${dateStr} ${timeStr}\nPlease book another slot.`;
+      await plugin.send(String(appointment.customer_telegram_id), { text: msg });
+    }
+  }
+
+  // Show reschedule options
+  private async showRescheduleOptions(
+    message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin, aptId: string
+  ): Promise<void> {
+    const appointment = await this.db.prepare(
+      'SELECT provider_id, service_id, customer_name, customer_telegram_id FROM appointments WHERE id = ?'
+    ).bind(aptId).first() as any;
+
+    if (!appointment) {
+      await plugin.send(message.chatId, { text: '❌ Appointment not found.' });
+      return;
+    }
+
+    // Verify doctor owns this appointment
+    const doctor = await this.db.prepare(
+      'SELECT id FROM providers WHERE platform_user_id = ?'
+    ).bind(session.platformUserId).first() as any;
+
+    if (!doctor || doctor.id !== appointment.provider_id) {
+      await plugin.send(message.chatId, { text: '❌ Not authorized.' });
+      return;
+    }
+
+    session.data.rescheduleAptId = aptId;
+    session.data.bookDoctorId = appointment.provider_id;
+    await this.showAvailableDates(message, session, plugin, appointment.service_id);
   }
 
   // Show help
