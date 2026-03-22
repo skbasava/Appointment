@@ -82,7 +82,10 @@ export async function cancelAppointment(c: Context<{ Bindings: Env }>): Promise<
 }
 
 export async function approveAppointment(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const provider = getProvider(c);
+  const userId = (c as any).get('userId');
+  if (!userId) throw new ValidationError('Not authenticated');
+
+  const provider = await c.env.DB.prepare('SELECT * FROM providers WHERE id = ?').bind(userId).first() as any;
   if (!provider) {
     throw new ValidationError('Provider not found');
   }
@@ -104,7 +107,10 @@ export async function approveAppointment(c: Context<{ Bindings: Env }>): Promise
 }
 
 export async function rejectAppointment(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const provider = getProvider(c);
+  const userId = (c as any).get('userId');
+  if (!userId) throw new ValidationError('Not authenticated');
+
+  const provider = await c.env.DB.prepare('SELECT * FROM providers WHERE id = ?').bind(userId).first() as any;
   if (!provider) {
     throw new ValidationError('Provider not found');
   }
