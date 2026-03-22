@@ -5,6 +5,8 @@ export interface Provider {
   email: string;
   phone: string | null;
   firebase_uid: string;
+  hospital_id?: string;
+  specialty?: string;
   timezone: string;
   status: 'pending' | 'verified' | 'active' | 'suspended';
   platform?: string;

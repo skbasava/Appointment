@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS providers (
   email TEXT UNIQUE NOT NULL,
   phone TEXT,
   firebase_uid TEXT UNIQUE NOT NULL,
+  hospital_id TEXT,
+  specialty TEXT,
   platform TEXT,
   platform_user_id TEXT,
   timezone TEXT NOT NULL DEFAULT 'UTC',
