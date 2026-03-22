@@ -43,3 +43,10 @@ export async function getProviderByPlatformUserId(db: D1Database, platformUserId
     'SELECT * FROM providers WHERE platform_user_id = ?'
   ).bind(platformUserId).first();
 }
+
+export async function getHospitals(db: D1Database) {
+  const results = await db.prepare(
+    'SELECT id, name FROM providers WHERE type = ? AND status = ? ORDER BY name ASC'
+  ).bind('hospital', 'active').all();
+  return results.results;
+}

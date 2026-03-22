@@ -122,6 +122,11 @@ export class OnboardingFlowHandler {
       case '/appointments':
         await this.showAppointments(message, session, plugin);
         break;
+      case '/register_hospital':
+        session.step = 'hospital_name';
+        session.data = {};
+        await plugin.send(message.chatId, { text: '🏥 Enter hospital name:' });
+        break;
       case '/help':
         await this.showHelp(message, plugin);
         break;
@@ -334,6 +339,18 @@ export class OnboardingFlowHandler {
         await plugin.send(message.chatId, { text: '✅ Phone verified!' });
         await this.showPatientConfirmation(message, session, plugin);
         break;
+
+      // Hospital registration
+      case 'hospital_name': {
+        const hospitalId = crypto.randomUUID();
+        await this.db.prepare(
+          'INSERT INTO providers (id, type, name, email, firebase_uid, timezone, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).bind(hospitalId, 'hospital', text.trim(), `hospital-${hospitalId}@placeholder.com`, hospitalId, 'UTC', 'active', Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000)).run();
+
+        session.step = 'idle';
+        await plugin.send(message.chatId, { text: `✅ Hospital "${text.trim()}" registered!` });
+        break;
+      }
 
       default:
         await plugin.send(message.chatId, { text: 'Type /help for available commands.' });
