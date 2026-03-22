@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateTOTPSecret, generateTOTP, verifyTOTP, base32Encode, base32Decode } from '../../../src/lib/auth/totp';
+import { generateTOTPSecret, generateTOTP, verifyTOTP, base32Encode, base32Decode, generateTOTPUri, generateQRCode } from '../../../src/lib/auth/totp';
 
 describe('TOTP', () => {
   describe('base32Encode/base32Decode', () => {
@@ -87,6 +87,35 @@ describe('TOTP', () => {
       const code = await generateTOTP(secret, farFuture);
       const result = await verifyTOTP(secret, code);
       expect(result).toBe(false);
+    });
+  });
+
+  describe('generateTOTPUri', () => {
+    it('should generate a valid otpauth URI', () => {
+      const uri = generateTOTPUri('JBSWY3DPEHPK3PXP', 'Dr. Smith', 'Appoint');
+      expect(uri).toContain('otpauth://totp/');
+      expect(uri).toContain('secret=JBSWY3DPEHPK3PXP');
+      expect(uri).toContain('issuer=Appoint');
+      expect(uri).toContain('algorithm=SHA1');
+      expect(uri).toContain('digits=6');
+      expect(uri).toContain('period=30');
+    });
+
+    it('should encode special characters in label and issuer', () => {
+      const uri = generateTOTPUri('SECRET', 'Dr. John Doe', 'My App');
+      expect(uri).toContain('Dr.%20John%20Doe');
+      expect(uri).toContain('My%20App');
+    });
+  });
+
+  describe('generateQRCode', () => {
+    it('should return PNG bytes', async () => {
+      const uri = 'otpauth://totp/Appoint:Dr.Test?secret=JBSWY3DPEHPK3PXP&issuer=Appoint';
+      const png = await generateQRCode(uri);
+      expect(png[0]).toBe(137);
+      expect(png[1]).toBe(80);
+      expect(png[2]).toBe(78);
+      expect(png[3]).toBe(71);
     });
   });
 });

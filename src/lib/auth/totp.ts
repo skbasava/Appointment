@@ -1,3 +1,5 @@
+import QRCode from 'qrcode';
+
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
 export function base32Encode(bytes: Uint8Array): string {
@@ -72,4 +74,19 @@ export async function verifyTOTP(secret: string, code: string): Promise<boolean>
   const after = await generateTOTP(secret, Date.now() + 30000);
   if (constantTimeCompare(after, code)) return true;
   return false;
+}
+
+export function generateTOTPUri(secret: string, label: string, issuer: string): string {
+  return `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(label)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
+}
+
+export async function generateQRCode(uri: string): Promise<Uint8Array> {
+  const dataUrl = await QRCode.toDataURL(uri, { width: 256, margin: 1 });
+  const base64 = dataUrl.split(',')[1];
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
 }
