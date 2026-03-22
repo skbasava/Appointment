@@ -14,6 +14,12 @@ describe('TOTP', () => {
       const bytes = new Uint8Array([0x48, 0x65, 0x6c, 0x6c, 0x6f]);
       expect(base32Encode(bytes)).toBe('JBSWY3DP');
     });
+
+    it('should throw on invalid base32 characters', () => {
+      expect(() => base32Decode('INVALID!')).toThrow('Invalid base32 character');
+      expect(() => base32Decode('JBSWY3DP ')).toThrow('Invalid base32 character');
+      expect(() => base32Decode('hello8')).toThrow('Invalid base32 character');
+    });
   });
 
   describe('generateTOTPSecret', () => {
@@ -48,6 +54,38 @@ describe('TOTP', () => {
 
     it('should reject an incorrect code', async () => {
       const result = await verifyTOTP('JBSWY3DPEHPK3PXP', '000000');
+      expect(result).toBe(false);
+    });
+
+    it('should verify code from previous time period (clock skew backward)', async () => {
+      const secret = 'JBSWY3DPEHPK3PXP';
+      const pastTime = Date.now() - 30000;
+      const code = await generateTOTP(secret, pastTime);
+      const result = await verifyTOTP(secret, code);
+      expect(result).toBe(true);
+    });
+
+    it('should verify code from next time period (clock skew forward)', async () => {
+      const secret = 'JBSWY3DPEHPK3PXP';
+      const futureTime = Date.now() + 30000;
+      const code = await generateTOTP(secret, futureTime);
+      const result = await verifyTOTP(secret, code);
+      expect(result).toBe(true);
+    });
+
+    it('should reject code from 2 periods in the past', async () => {
+      const secret = 'JBSWY3DPEHPK3PXP';
+      const farPast = Date.now() - 60000;
+      const code = await generateTOTP(secret, farPast);
+      const result = await verifyTOTP(secret, code);
+      expect(result).toBe(false);
+    });
+
+    it('should reject code from 2 periods in the future', async () => {
+      const secret = 'JBSWY3DPEHPK3PXP';
+      const farFuture = Date.now() + 60000;
+      const code = await generateTOTP(secret, farFuture);
+      const result = await verifyTOTP(secret, code);
       expect(result).toBe(false);
     });
   });

@@ -17,7 +17,9 @@ export function base32Decode(str: string): Uint8Array {
   let bits = '';
   for (const char of str.toUpperCase()) {
     const index = ALPHABET.indexOf(char);
-    if (index === -1) continue;
+    if (index === -1) {
+      throw new Error(`Invalid base32 character: '${char}'`);
+    }
     bits += index.toString(2).padStart(5, '0');
   }
   const bytes = new Uint8Array(Math.floor(bits.length / 8));
@@ -52,13 +54,22 @@ export async function generateTOTP(secret: string, time?: number): Promise<strin
   return code.toString().padStart(6, '0');
 }
 
+function constantTimeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
 export async function verifyTOTP(secret: string, code: string): Promise<boolean> {
   const current = await generateTOTP(secret);
-  if (current === code) return true;
+  if (constantTimeCompare(current, code)) return true;
   // Allow 1 period clock skew
   const before = await generateTOTP(secret, Date.now() - 30000);
-  if (before === code) return true;
+  if (constantTimeCompare(before, code)) return true;
   const after = await generateTOTP(secret, Date.now() + 30000);
-  if (after === code) return true;
+  if (constantTimeCompare(after, code)) return true;
   return false;
 }
