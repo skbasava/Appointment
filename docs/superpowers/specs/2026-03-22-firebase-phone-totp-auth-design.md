@@ -206,6 +206,7 @@ Doctor sends 6-digit code → Bot → Web Crypto HMAC-SHA1 → Verify
 
 ## Open Questions
 
-- [ ] Firebase reCAPTCHA Enterprise setup — requires Firebase Console configuration
+- [ ] Firebase reCAPTCHA Enterprise setup — requires Firebase Console configuration. The `accounts:sendVerificationCode` endpoint requires an attestation token from reCAPTCHA Enterprise. The bot needs to generate or pass a reCAPTCHA token on each send. Confirm setup is in place before planning.
 - [ ] Whether to show QR code in addition to text secret for doctor TOTP setup (future enhancement)
 - [ ] Phone number country code handling for Firebase (uses E.164 format)
+- [ ] Existing patients who onboarded without verified phone — decide whether to prompt verification on next interaction or leave as-is
