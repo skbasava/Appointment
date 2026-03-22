@@ -14,7 +14,9 @@ export const DOCTOR_STEPS = {
   LICENSE: 'doctor_license',
   PHONE: 'doctor_phone',
   PHONE_VERIFY: 'doctor_phone_verify',
+  HOSPITAL: 'doctor_hospital',
   SPECIALTY: 'doctor_specialty',
+  CALENDAR: 'doctor_calendar',
   CLINIC_NAME: 'clinic_name',
   CLINIC_ADDRESS: 'clinic_address',
   CLINIC_PHONE: 'clinic_phone',
@@ -156,10 +158,34 @@ export class OnboardingFlowHandler {
       await plugin.send(message.chatId, { text: '🏥 Enter clinic name:' });
     } else if (data === 'clinic:done') {
       await this.showDoctorConfirmation(message, session, plugin);
+    } else if (data.startsWith('hospital:')) {
+      const hospitalId = data.split(':')[1];
+      session.data.hospitalId = hospitalId;
+
+      session.step = DOCTOR_STEPS.SPECIALTY;
+      await plugin.sendWithButtons(message.chatId, '🏥 Select your specialty:', [
+        [{ text: 'General Physician', callbackData: 'specialty:general' }],
+        [{ text: 'Cardiologist', callbackData: 'specialty:cardiology' }],
+        [{ text: 'Dermatologist', callbackData: 'specialty:dermatology' }],
+        [{ text: 'Pediatrician', callbackData: 'specialty:pediatrics' }],
+        [{ text: 'Orthopedic', callbackData: 'specialty:orthopedic' }],
+        [{ text: 'Other', callbackData: 'specialty:other' }],
+      ]);
     } else if (data.startsWith('specialty:')) {
       session.data.specialty = data.split(':')[1];
-      session.step = DOCTOR_STEPS.CLINIC_NAME;
-      await plugin.send(message.chatId, { text: '🏥 Enter your clinic name:' });
+
+      // Trigger Google Calendar OAuth
+      session.step = DOCTOR_STEPS.CALENDAR;
+      const providerId = session.data.doctorId || crypto.randomUUID();
+      session.data.doctorId = providerId;
+
+      const oauthUrl = `${this.baseUrl}/api/providers/${providerId}/calendar/oauth-url`;
+
+      await plugin.send(message.chatId, {
+        text: `🔐 <b>Connect your Google Calendar</b>\n\nTap the link below to authorize:\n${oauthUrl}\n\nAfter authorizing, I'll detect it automatically.`,
+      });
+
+      this.pollCalendarConnection(message, session, plugin, providerId);
     } else if (data.startsWith('apt:approve:')) {
       const aptId = data.split(':')[2];
       await this.handleAppointmentAction(message, session, plugin, aptId, 'confirmed');
@@ -169,6 +195,9 @@ export class OnboardingFlowHandler {
     } else if (data.startsWith('apt:reschedule:')) {
       const aptId = data.split(':')[2];
       await this.showRescheduleOptions(message, session, plugin, aptId);
+    } else if (data.startsWith('book:hospital:')) {
+      const hospitalId = data.split(':')[2];
+      await this.showHospitalDoctors(message, session, plugin, hospitalId);
     } else if (data.startsWith('book:doctor:')) {
       const doctorId = data.split(':')[2];
       await this.showDoctorServices(message, session, plugin, doctorId);
@@ -241,15 +270,20 @@ export class OnboardingFlowHandler {
         }
         session.data.phone_verified = 1;
         session.data.totp_enabled = 1;
-        session.step = DOCTOR_STEPS.SPECIALTY;
-        await plugin.sendWithButtons(message.chatId, '✅ Authenticator verified!\n\n🏥 Select your specialty:', [
-          [{ text: 'General Physician', callbackData: 'specialty:general' }],
-          [{ text: 'Cardiologist', callbackData: 'specialty:cardiology' }],
-          [{ text: 'Dermatologist', callbackData: 'specialty:dermatology' }],
-          [{ text: 'Pediatrician', callbackData: 'specialty:pediatrics' }],
-          [{ text: 'Orthopedic', callbackData: 'specialty:orthopedic' }],
-          [{ text: 'Other', callbackData: 'specialty:other' }],
+        session.step = DOCTOR_STEPS.HOSPITAL;
+        const hospitals = await this.db.prepare(
+          'SELECT id, name FROM providers WHERE type = ? AND status = ? ORDER BY name ASC'
+        ).bind('hospital', 'active').all();
+
+        if (!hospitals.results || hospitals.results.length === 0) {
+          await plugin.send(message.chatId, { text: '⚠️ No hospitals registered yet. Contact admin.' });
+          return;
+        }
+
+        const buttons = (hospitals.results as any[]).map((h: any) => [
+          { text: h.name, callbackData: `hospital:${h.id}` },
         ]);
+        await plugin.sendWithButtons(message.chatId, '✅ Authenticator verified!\n\n🏥 Select your hospital:', buttons);
         break;
 
       case DOCTOR_STEPS.CLINIC_NAME:
@@ -437,6 +471,40 @@ export class OnboardingFlowHandler {
     );
   }
 
+  private async pollCalendarConnection(
+    message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin, providerId: string
+  ): Promise<void> {
+    let attempts = 0;
+    const maxAttempts = 40;
+
+    const poll = async () => {
+      if (session.step !== DOCTOR_STEPS.CALENDAR) return;
+
+      const connection = await this.db.prepare(
+        'SELECT * FROM calendar_connections WHERE provider_id = ? AND status = ?'
+      ).bind(providerId, 'connected').first();
+
+      if (connection) {
+        session.step = DOCTOR_STEPS.CONFIRM;
+        await plugin.send(message.chatId, { text: '✅ Google Calendar connected!' });
+        await this.showDoctorConfirmation(message, session, plugin);
+        return;
+      }
+
+      attempts++;
+      if (attempts >= maxAttempts) {
+        await plugin.send(message.chatId, {
+          text: '⏰ Calendar connection timed out. Send /register_doctor to try again.',
+        });
+        return;
+      }
+
+      setTimeout(poll, 3000);
+    };
+
+    setTimeout(poll, 3000);
+  }
+
   // Save doctor to database
   private async saveDoctor(message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin): Promise<void> {
     try {
@@ -445,12 +513,13 @@ export class OnboardingFlowHandler {
 
       // Insert doctor
       await this.db.prepare(
-        `INSERT INTO providers (id, type, name, email, phone, totp_secret, totp_enabled, platform, platform_user_id, timezone, status, created_at, updated_at)
-         VALUES (?, 'doctor', ?, ?, ?, ?, ?, ?, ?, 'UTC', 'active', ?, ?)`
+        `INSERT INTO providers (id, type, name, email, phone, totp_secret, totp_enabled, platform, platform_user_id, timezone, status, hospital_id, specialty, created_at, updated_at)
+         VALUES (?, 'doctor', ?, ?, ?, ?, ?, ?, ?, 'UTC', 'active', ?, ?, ?, ?)`
       ).bind(
         doctorId, name, session.data.email || null, phone,
         session.data.totpSecret || null, session.data.totp_enabled || 0,
         session.platform || null, session.platformUserId || null,
+        session.data.hospitalId || null, session.data.specialty || null,
         Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000)
       ).run();
 
@@ -542,19 +611,40 @@ export class OnboardingFlowHandler {
 
   // Show booking
   private async showBooking(message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin): Promise<void> {
-    const doctors = await this.db.prepare(
-      'SELECT id, name, phone FROM providers WHERE type = ? AND status = ? ORDER BY name ASC LIMIT 10'
-    ).bind('doctor', 'active').all();
+    const hospitals = await this.db.prepare(
+      'SELECT id, name FROM providers WHERE type = ? AND status = ? ORDER BY name ASC'
+    ).bind('hospital', 'active').all();
 
-    if (!doctors.results || doctors.results.length === 0) {
-      await plugin.send(message.chatId, { text: '📅 No doctors available right now.' });
+    if (!hospitals.results || hospitals.results.length === 0) {
+      await plugin.send(message.chatId, { text: '🏥 No hospitals available right now.' });
       return;
     }
 
-    const buttons = (doctors.results as any[]).map(doc => [
-      { text: `👨‍⚕️ ${doc.name}`, callbackData: `book:doctor:${doc.id}` },
+    const buttons = (hospitals.results as any[]).map(h => [
+      { text: `🏥 ${h.name}`, callbackData: `book:hospital:${h.id}` },
     ]);
-    await plugin.sendWithButtons(message.chatId, '📅 <b>Select a doctor:</b>', buttons);
+    await plugin.sendWithButtons(message.chatId, '🏥 <b>Select a hospital:</b>', buttons);
+  }
+
+  private async showHospitalDoctors(
+    message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin, hospitalId: string
+  ): Promise<void> {
+    const doctors = await this.db.prepare(
+      'SELECT id, name, specialty FROM providers WHERE hospital_id = ? AND type = ? AND status = ? ORDER BY name ASC'
+    ).bind(hospitalId, 'doctor', 'active').all();
+
+    if (!doctors.results || doctors.results.length === 0) {
+      await plugin.send(message.chatId, { text: '👨‍⚕️ No doctors at this hospital.' });
+      return;
+    }
+
+    const hospital = await this.db.prepare('SELECT name FROM providers WHERE id = ?').bind(hospitalId).first() as any;
+    session.data.bookHospitalId = hospitalId;
+
+    const buttons = (doctors.results as any[]).map(doc => [
+      { text: `👨‍⚕️ ${doc.name}${doc.specialty ? ` (${doc.specialty})` : ''}`, callbackData: `book:doctor:${doc.id}` },
+    ]);
+    await plugin.sendWithButtons(message.chatId, `👨‍⚕️ <b>${hospital.name}</b>\nSelect a doctor:`, buttons);
   }
 
   private async showDoctorServices(
@@ -582,33 +672,42 @@ export class OnboardingFlowHandler {
     message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin, serviceId: string
   ): Promise<void> {
     const doctorId = session.data.bookDoctorId;
-    const windows = await this.db.prepare(
-      'SELECT day_of_week, start_time, end_time FROM availability_windows WHERE provider_id = ? AND is_active = 1'
-    ).bind(doctorId).all();
+    session.data.bookServiceId = serviceId;
 
-    if (!windows.results || windows.results.length === 0) {
-      await plugin.send(message.chatId, { text: '📅 No availability set.' }); return;
+    const service = await this.db.prepare(
+      'SELECT duration_minutes FROM services WHERE id = ?'
+    ).bind(serviceId).first() as any;
+
+    if (!service) {
+      await plugin.send(message.chatId, { text: '❌ Service not found.' });
+      return;
     }
 
-    const buttons: MessageButton[][] = [];
+    const duration = service.duration_minutes || 30;
+    const buttons: any[][] = [];
     const now = new Date();
+
+    // Generate 7 days of 30-min slots during default hours (9-17)
     for (let d = 0; d < 7; d++) {
       const date = new Date(now);
       date.setDate(date.getDate() + d);
-      const dayOfWeek = date.getDay();
-      const matchingWindows = (windows.results as any[]).filter(w => w.day_of_week === dayOfWeek);
-      if (matchingWindows.length === 0) continue;
 
-      for (const w of matchingWindows) {
-        const [startH, startM] = w.start_time.split(':').map(Number);
-        const [endH, endM] = w.end_time.split(':').map(Number);
-        for (let h = startH; h < endH; h++) {
-          for (let m = 0; m < 60; m += 30) {
-            if (h === startH && m < startM) continue;
-            if (h === endH && m >= endM) continue;
-            const dateStr = date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
-            const timeStr = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-            const epoch = Math.floor(new Date(date.getFullYear(), date.getMonth(), date.getDate(), h, m).getTime() / 1000);
+      for (let h = 9; h < 17; h++) {
+        for (let m = 0; m < 60; m += 30) {
+          const slotStart = new Date(date.getFullYear(), date.getMonth(), date.getDate(), h, m);
+          const slotEnd = new Date(slotStart.getTime() + duration * 60 * 1000);
+
+          // Skip past slots
+          if (slotStart <= now) continue;
+
+          // Check calendar conflicts via FreeBusy
+          const { checkCalendarConflicts } = await import('../../lib/calendar/sync');
+          const hasConflict = await checkCalendarConflicts(this.env as any, doctorId, slotStart, slotEnd);
+
+          if (!hasConflict) {
+            const dateStr = slotStart.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+            const timeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+            const epoch = Math.floor(slotStart.getTime() / 1000);
             buttons.push([{ text: `${dateStr} ${timeStr}`, callbackData: `book:slot:${serviceId}:${epoch}` }]);
           }
         }
@@ -616,10 +715,10 @@ export class OnboardingFlowHandler {
     }
 
     if (buttons.length === 0) {
-      await plugin.send(message.chatId, { text: '📅 No slots available in the next 7 days.' }); return;
+      await plugin.send(message.chatId, { text: '📅 No slots available in the next 7 days.' });
+      return;
     }
 
-    session.data.bookServiceId = serviceId;
     await plugin.sendWithButtons(message.chatId, '📅 <b>Pick a time slot:</b>', buttons.slice(0, 20));
   }
 
