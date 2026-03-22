@@ -6,6 +6,7 @@ import { generateOTPSession, verifyOTP } from '../../lib/auth/phone-otp';
 import { generateTOTPSecret, generateTOTP, verifyTOTP, generateTOTPUri, generateQRCode } from '../../lib/auth/totp';
 import { normalizePhone } from '../../lib/phone/normalize';
 import { createProviderRegistry } from '../../lib/otp/providers/index';
+import { isTwilioOTPEnabled } from '../../lib/auth/feature-flags';
 
 // Onboarding Steps
 export const DOCTOR_STEPS = {
@@ -352,26 +353,65 @@ export class OnboardingFlowHandler {
           await plugin.send(message.chatId, { text: `❌ Invalid phone number. Please enter a valid number:` });
           return;
         }
-        try {
-          if (this.otpRegistry) {
-            const otp = await generateOTPSession(this.db, session.data.phone, 'sms');
-            await this.otpRegistry.sendOTPWithFallback(session.data.phone, otp);
+
+        if (isTwilioOTPEnabled(this.env as any)) {
+          // SMS OTP path (existing Twilio flow)
+          try {
+            if (this.otpRegistry) {
+              const otp = await generateOTPSession(this.db, session.data.phone, 'sms');
+              await this.otpRegistry.sendOTPWithFallback(session.data.phone, otp);
+            }
+          } catch (e: any) {
+            console.error('OTP send error:', e);
           }
-        } catch (e: any) {
-          console.error('OTP send error:', e);
+          session.step = PATIENT_STEPS.PHONE_VERIFY;
+          await plugin.send(message.chatId, { text: '🔐 We sent a verification code to your phone. Enter the code:' });
+        } else {
+          // TOTP + QR code path (new default)
+          const patientSecret = generateTOTPSecret();
+          session.data.totpSecret = patientSecret;
+          session.step = PATIENT_STEPS.PHONE_VERIFY;
+
+          const patientUri = generateTOTPUri(patientSecret, session.data.name || 'Patient', 'Appoint');
+
+          try {
+            const qrPng = await generateQRCode(patientUri);
+            await (plugin as any).sendImageBuffer(message.chatId, qrPng,
+              '🔐 Scan this QR code with Google/Microsoft Authenticator'
+            );
+          } catch (e: any) {
+            console.error('QR code send failed, falling back to text:', e);
+          }
+
+          await plugin.send(message.chatId, {
+            text: `🔐 <b>Or enter manually:</b>\n\nSecret: <code>${patientSecret}</code>\n\nThen enter the 6-digit code:`,
+          });
         }
-        session.step = PATIENT_STEPS.PHONE_VERIFY;
-        await plugin.send(message.chatId, { text: '🔐 We sent a verification code to your phone. Enter the code:' });
         break;
 
       case PATIENT_STEPS.PHONE_VERIFY:
-        try {
-          if (this.otpRegistry) {
-            await verifyOTP(this.db, session.data.phone, text.trim());
+        if (isTwilioOTPEnabled(this.env as any)) {
+          // SMS OTP verification
+          try {
+            if (this.otpRegistry) {
+              await verifyOTP(this.db, session.data.phone, text.trim());
+            }
+          } catch (e: any) {
+            await plugin.send(message.chatId, { text: `❌ ${e.message} Try again:` });
+            return;
           }
-        } catch (e: any) {
-          await plugin.send(message.chatId, { text: `❌ ${e.message} Try again:` });
-          return;
+        } else {
+          // TOTP verification
+          const patientSecret = session.data.totpSecret;
+          if (!patientSecret) {
+            await plugin.send(message.chatId, { text: '❌ Session error. Please start over with /register_patient' });
+            return;
+          }
+          const valid = await verifyTOTP(patientSecret, text.trim());
+          if (!valid) {
+            await plugin.send(message.chatId, { text: '❌ Incorrect code. Try again:' });
+            return;
+          }
         }
         session.data.phone_verified = 1;
         session.step = PATIENT_STEPS.CONFIRM;
@@ -589,11 +629,12 @@ export class OnboardingFlowHandler {
       ).run();
 
       await this.db.prepare(
-        `INSERT OR REPLACE INTO patient_auth (id, name, phone, phone_verified, firebase_uid, telegram_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR REPLACE INTO patient_auth (id, name, phone, phone_verified, totp_secret, firebase_uid, telegram_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         patientId, name, phone,
         session.data.phone_verified || 0,
+        session.data.totpSecret || null,
         session.data.firebase_uid || null,
         session.platform === 'telegram' ? session.platformUserId : null,
         Math.floor(Date.now() / 1000)
