@@ -138,3 +138,23 @@ export async function checkCalendarConflicts(
 
   return client.hasConflict(startTime, endTime);
 }
+
+export async function confirmCalendarEvent(
+  env: Env,
+  providerId: string,
+  eventId: string
+): Promise<boolean> {
+  const client = await getCalendarClientForProvider(env, providerId);
+  if (!client) return false;
+
+  try {
+    await client.updateEvent(eventId, {
+      status: 'confirmed',
+      transparency: 'opaque',
+    });
+    return true;
+  } catch (error) {
+    console.error('Failed to confirm calendar event:', error);
+    return false;
+  }
+}

@@ -27,19 +27,25 @@ export class GoogleCalendarClient {
     description?: string;
     startTime: Date;
     endTime: Date;
+    status?: string;
+    transparency?: string;
   }): Promise<CalendarEvent> {
+    const body: Record<string, unknown> = {
+      summary: event.summary,
+      description: event.description,
+      start: { dateTime: event.startTime.toISOString() },
+      end: { dateTime: event.endTime.toISOString() },
+    };
+    if (event.status) body.status = event.status;
+    if (event.transparency) body.transparency = event.transparency;
+
     const response = await fetch(`${CALENDAR_API_BASE}/calendars/${this.calendarId}/events`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${this.accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        summary: event.summary,
-        description: event.description,
-        start: { dateTime: event.startTime.toISOString() },
-        end: { dateTime: event.endTime.toISOString() },
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -57,6 +63,8 @@ export class GoogleCalendarClient {
       description?: string;
       startTime?: Date;
       endTime?: Date;
+      status?: string;
+      transparency?: string;
     }
   ): Promise<CalendarEvent> {
     const body: Record<string, unknown> = {};
@@ -65,6 +73,8 @@ export class GoogleCalendarClient {
     if (event.description) body.description = event.description;
     if (event.startTime) body.start = { dateTime: event.startTime.toISOString() };
     if (event.endTime) body.end = { dateTime: event.endTime.toISOString() };
+    if (event.status) body.status = event.status;
+    if (event.transparency) body.transparency = event.transparency;
 
     const response = await fetch(
       `${CALENDAR_API_BASE}/calendars/${this.calendarId}/events/${eventId}`,
