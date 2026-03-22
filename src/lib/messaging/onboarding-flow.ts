@@ -1013,10 +1013,25 @@ export class OnboardingFlowHandler {
     if (appointment.customer_telegram_id) {
       const dateStr = new Date(appointment.start_time * 1000).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
       const timeStr = new Date(appointment.start_time * 1000).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-      const msg = newStatus === 'confirmed'
-        ? `✅ Your appointment is confirmed!\n📅 ${dateStr} ${timeStr}`
-        : `❌ Your appointment was declined.\n📅 ${dateStr} ${timeStr}\nPlease book another slot.`;
-      await plugin.send(String(appointment.customer_telegram_id), { text: msg });
+
+      if (newStatus === 'confirmed') {
+        const verifyUrl = `${this.baseUrl}/verify/${appointmentId}`;
+        try {
+          const qrBytes = await generateQRCode(verifyUrl);
+          const { TelegramPlugin } = await import('./telegram-plugin');
+          const tgPlugin = new TelegramPlugin(this.env as any);
+          await tgPlugin.sendImageBuffer(String(appointment.customer_telegram_id), qrBytes,
+            `✅ Appointment confirmed!\n📅 ${dateStr} ${timeStr}\n\nShow this QR at reception.`);
+        } catch (e) {
+          await plugin.send(String(appointment.customer_telegram_id), {
+            text: `✅ Appointment confirmed!\n📅 ${dateStr} ${timeStr}\n\nVerification: ${verifyUrl}`,
+          });
+        }
+      } else {
+        await plugin.send(String(appointment.customer_telegram_id), {
+          text: `❌ Your appointment was declined.\n📅 ${dateStr} ${timeStr}\nPlease book another slot.`,
+        });
+      }
     }
   }
 
