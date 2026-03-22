@@ -3,7 +3,7 @@
 
 import { PluginManager, MessagingPlugin, IncomingMessage, MessageButton, PlatformType, OnboardingState } from './plugin';
 import { generateOTPSession, verifyOTP } from '../../lib/auth/phone-otp';
-import { generateTOTPSecret, verifyTOTP } from '../../lib/auth/totp';
+import { generateTOTPSecret, generateTOTP, verifyTOTP, generateTOTPUri, generateQRCode } from '../../lib/auth/totp';
 import { normalizePhone } from '../../lib/phone/normalize';
 import { createProviderRegistry } from '../../lib/otp/providers/index';
 
@@ -239,16 +239,21 @@ export class OnboardingFlowHandler {
         const totpSecret = generateTOTPSecret();
         session.data.totpSecret = totpSecret;
         session.step = DOCTOR_STEPS.PHONE_VERIFY;
+        const doctorUri = generateTOTPUri(totpSecret, `Dr.${session.data.name || 'Doctor'}`, 'Appoint');
+
+        // Try to send QR code image
+        try {
+          const qrPng = await generateQRCode(doctorUri);
+          await (plugin as any).sendImageBuffer(message.chatId, qrPng,
+            '🔐 Scan this QR code with Google/Microsoft Authenticator'
+          );
+        } catch (e: any) {
+          console.error('QR code send failed, falling back to text:', e);
+        }
+
+        // Always send text fallback
         await plugin.send(message.chatId, {
-          text: `🔐 <b>Set up your Authenticator app</b>\n\n` +
-                `Secret key: <code>${totpSecret}</code>\n\n` +
-                `Steps:\n` +
-                `1. Open Google/Microsoft Authenticator\n` +
-                `2. Tap '+' → 'Enter a setup key'\n` +
-                `3. Account: Appoint-Dr.${session.data.name || 'Doctor'}\n` +
-                `4. Key: <code>${totpSecret}</code>\n` +
-                `5. Tap 'Add'\n\n` +
-                `Then enter the 6-digit code from your authenticator:`,
+          text: `🔐 <b>Or enter manually:</b>\n\nSecret: <code>${totpSecret}</code>\nAccount: Dr.${session.data.name || 'Doctor'}\n\nThen enter the 6-digit code:`,
         });
         break;
 
