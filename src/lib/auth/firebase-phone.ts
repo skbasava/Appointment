@@ -7,21 +7,26 @@ export async function sendFirebaseVerificationCode(
   phone: string,
   env: { FIREBASE_API_KEY: string }
 ): Promise<string> {
-  const response = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/accounts:sendVerificationCode?key=${env.FIREBASE_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        phoneNumber: phone,
-        recaptchaToken: 'skip', // Server-side bot flow; reCAPTCHA Enterprise handles this
-      }),
-    }
-  );
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:sendVerificationCode?key=${env.FIREBASE_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phoneNumber: phone,
+          recaptchaToken: 'skip', // Server-side bot flow; reCAPTCHA Enterprise handles this
+        }),
+      }
+    );
+  } catch (error) {
+    throw new Error('Firebase send verification failed: network error');
+  }
 
   if (!response.ok) {
     const errorData = await response.json() as { error?: { message?: string } };
-    console.error('Firebase send verification failed:', errorData);
+    console.error('Firebase send verification failed:', errorData.error?.message || 'Unknown error');
     throw new Error(`Firebase send verification failed: ${errorData.error?.message || 'Unknown error'}`);
   }
 
@@ -34,18 +39,23 @@ export async function verifyFirebaseCode(
   code: string,
   env: { FIREBASE_API_KEY: string }
 ): Promise<FirebaseVerificationResult> {
-  const response = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPhoneNumber?key=${env.FIREBASE_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionInfo, code }),
-    }
-  );
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPhoneNumber?key=${env.FIREBASE_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionInfo, code }),
+      }
+    );
+  } catch (error) {
+    throw new Error('Firebase verification failed: network error');
+  }
 
   if (!response.ok) {
     const errorData = await response.json() as { error?: { message?: string } };
-    console.error('Firebase verification failed:', errorData);
+    console.error('Firebase verification failed:', errorData.error?.message || 'Invalid code');
     throw new Error(`Firebase verification failed: ${errorData.error?.message || 'Invalid code'}`);
   }
 

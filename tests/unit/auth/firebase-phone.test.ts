@@ -22,7 +22,10 @@ describe('Firebase Phone Auth', () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         'https://identitytoolkit.googleapis.com/v1/accounts:sendVerificationCode?key=test-api-key',
-        expect.objectContaining({ method: 'POST' })
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ phoneNumber: '+911234567890', recaptchaToken: 'skip' }),
+        })
       );
       expect(sessionInfo).toBe('session-123');
     });
@@ -35,6 +38,13 @@ describe('Firebase Phone Auth', () => {
 
       await expect(sendFirebaseVerificationCode('+invalid', env))
         .rejects.toThrow('Firebase send verification failed');
+    });
+
+    it('should throw on network error', async () => {
+      mockFetch.mockRejectedValueOnce(new Error('DNS resolution failed'));
+
+      await expect(sendFirebaseVerificationCode('+911234567890', env))
+        .rejects.toThrow('Firebase send verification failed: network error');
     });
   });
 
@@ -65,6 +75,13 @@ describe('Firebase Phone Auth', () => {
 
       await expect(verifyFirebaseCode('session-123', '000000', env))
         .rejects.toThrow('Firebase verification failed');
+    });
+
+    it('should throw on network error', async () => {
+      mockFetch.mockRejectedValueOnce(new Error('DNS resolution failed'));
+
+      await expect(verifyFirebaseCode('session-123', '123456', env))
+        .rejects.toThrow('Firebase verification failed: network error');
     });
   });
 });
