@@ -736,62 +736,101 @@ export class OnboardingFlowHandler {
     if (!service) { await plugin.send(message.chatId, { text: '❌ Service not found.' }); return; }
 
     const endTime = startTime + service.duration_minutes * 60;
+    const startDate = new Date(startTime * 1000);
+    const endDate = new Date(endTime * 1000);
 
-    const conflicts = await this.db.prepare(
-      'SELECT id FROM appointments WHERE provider_id = ? AND status != ? AND start_time < ? AND end_time > ?'
-    ).bind(doctorId, 'cancelled', endTime, startTime).all();
+    // Create tentative calendar event
+    const { getCalendarClientForProvider } = await import('../../lib/calendar/sync');
+    const calClient = await getCalendarClientForProvider(this.env as any, doctorId);
 
-    if (conflicts.results && conflicts.results.length > 0) {
-      await plugin.send(message.chatId, { text: '❌ That slot is no longer available. Please pick another.' }); return;
+    let googleEventId: string | null = null;
+    if (calClient) {
+      try {
+        const event = await calClient.createEvent({
+          summary: `Appointment: ${service.name}`,
+          description: `Booking with ${customerName}\nStatus: TENTATIVE - awaiting doctor approval`,
+          startTime: startDate,
+          endTime: endDate,
+          status: 'tentative',
+          transparency: 'transparent',
+        });
+        googleEventId = event.id;
+      } catch (e) {
+        console.error('Failed to create tentative calendar event:', e);
+        await plugin.send(message.chatId, { text: '❌ Failed to create booking. Please try again.' });
+        return;
+      }
     }
 
-    const dateStr = new Date(startTime * 1000).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
-    const timeStr = new Date(startTime * 1000).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-
-    // Handle reschedule
+    // Check if this is a reschedule flow
     if (session.data.rescheduleAptId) {
-      const rescheduleAptId = session.data.rescheduleAptId;
-
+      const oldAptId = session.data.rescheduleAptId;
       const oldApt = await this.db.prepare(
-        'SELECT customer_telegram_id, customer_name FROM appointments WHERE id = ?'
-      ).bind(rescheduleAptId).first() as any;
+        'SELECT google_event_id, customer_name, customer_telegram_id FROM appointments WHERE id = ?'
+      ).bind(oldAptId).first() as any;
+
+      if (oldApt?.google_event_id) {
+        const oldCalClient = await getCalendarClientForProvider(this.env as any, doctorId);
+        if (oldCalClient) {
+          try { await oldCalClient.deleteEvent(oldApt.google_event_id); } catch (e) { /* ignore */ }
+        }
+      }
 
       await this.db.prepare(
-        'UPDATE appointments SET start_time = ?, end_time = ?, status = ?, updated_at = ? WHERE id = ?'
-      ).bind(startTime, endTime, 'confirmed', Math.floor(Date.now() / 1000), rescheduleAptId).run();
+        'UPDATE appointments SET start_time = ?, end_time = ?, google_event_id = ?, status = ?, updated_at = ? WHERE id = ?'
+      ).bind(startTime, endTime, googleEventId, 'pending', Math.floor(Date.now() / 1000), oldAptId).run();
 
-      await plugin.send(message.chatId, {
-        text: `✅ Appointment rescheduled!\n\n📅 ${dateStr} ${timeStr}\n👤 ${oldApt?.customer_name || customerName}`,
+      const dateStr = startDate.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+      const timeStr = startDate.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+
+      await plugin.send(oldApt.customer_telegram_id || session.platformUserId, {
+        text: `🔄 Appointment rescheduled!\n\n📅 ${dateStr} ${timeStr}\n🏥 ${service.name}\n\nWaiting for doctor confirmation...`,
       });
 
-      // Notify patient of reschedule
-      if (oldApt?.customer_telegram_id) {
-        const patientMsg = `🔄 Your appointment has been rescheduled!\n📅 New time: ${dateStr} ${timeStr}`;
-        await plugin.send(String(oldApt.customer_telegram_id), { text: patientMsg });
+      const doctor = await this.db.prepare(
+        'SELECT platform, platform_user_id FROM providers WHERE id = ?'
+      ).bind(doctorId).first() as any;
+
+      if (doctor?.platform && doctor?.platform_user_id) {
+        const doctorPlugin = this.pluginManager.get(doctor.platform as any);
+        if (doctorPlugin) {
+          await doctorPlugin.sendWithButtons(doctor.platform_user_id,
+            `🔄 <b>Rescheduled Booking</b>\n\n👤 ${oldApt.customer_name}\n🏥 ${service.name}\n📅 ${dateStr} ${timeStr}`,
+            [
+              [{ text: '✅ Approve', callbackData: `apt:approve:${oldAptId}` }],
+              [{ text: '❌ Reject', callbackData: `apt:reject:${oldAptId}` }],
+            ]
+          );
+        }
       }
 
       delete session.data.rescheduleAptId;
       return;
     }
 
-    // Normal booking flow
+    // Create DB record as 'pending'
     const aptId = crypto.randomUUID();
     await this.db.prepare(
-      `INSERT INTO appointments (id, provider_id, service_id, customer_name, customer_telegram_id, start_time, end_time, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`
-    ).bind(aptId, doctorId, serviceId, customerName, session.platformUserId, startTime, endTime,
+      `INSERT INTO appointments (id, provider_id, service_id, customer_name, customer_telegram_id, start_time, end_time, status, google_event_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`
+    ).bind(aptId, doctorId, serviceId, customerName, session.platformUserId,
+      startTime, endTime, googleEventId,
       Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000)).run();
 
+    // Notify patient
+    const dateStr = startDate.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+    const timeStr = startDate.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
     await plugin.send(message.chatId, {
       text: `✅ Booking requested!\n\n📅 ${dateStr} ${timeStr}\n👨‍⚕️ ${service.name}\n\nWaiting for doctor confirmation...`,
     });
 
+    // Notify doctor
     const doctor = await this.db.prepare(
       'SELECT platform, platform_user_id FROM providers WHERE id = ?'
     ).bind(doctorId).first() as any;
 
     if (doctor?.platform && doctor?.platform_user_id) {
-      const doctorPlugin = this.pluginManager.get(doctor.platform as PlatformType);
+      const doctorPlugin = this.pluginManager.get(doctor.platform as any);
       if (doctorPlugin) {
         await doctorPlugin.sendWithButtons(doctor.platform_user_id,
           `📋 <b>New Booking Request</b>\n\n👤 ${customerName}\n🏥 ${service.name}\n📅 ${dateStr} ${timeStr}`,
@@ -868,33 +907,58 @@ export class OnboardingFlowHandler {
     message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin,
     appointmentId: string, newStatus: 'confirmed' | 'cancelled'
   ): Promise<void> {
-    // Verify doctor owns this appointment
-    const doctor = await this.db.prepare(
-      'SELECT id FROM providers WHERE id = ?'
-    ).bind(session.platformUserId).first() as { id: string } | null;
-
-    if (!doctor) {
-      await plugin.send(message.chatId, { text: '❌ Doctor profile not found.' });
-      return;
-    }
-
+    // Look up appointment from DB (not session — doctor is a different user)
     const appointment = await this.db.prepare(
-      'SELECT * FROM appointments WHERE id = ? AND provider_id = ?'
-    ).bind(appointmentId, doctor.id).first() as any;
+      'SELECT a.*, p.platform as doctor_platform, p.platform_user_id as doctor_platform_user_id FROM appointments a JOIN providers p ON a.provider_id = p.id WHERE a.id = ?'
+    ).bind(appointmentId).first() as any;
 
     if (!appointment) {
       await plugin.send(message.chatId, { text: '❌ Appointment not found.' });
       return;
     }
 
-    if (appointment.status !== 'pending') {
-      await plugin.send(message.chatId, { text: `ℹ️ Appointment already ${appointment.status}.` });
+    // Verify this doctor owns the appointment
+    if (appointment.doctor_platform_user_id !== session.platformUserId) {
+      await plugin.send(message.chatId, { text: '❌ Not authorized.' });
       return;
     }
 
+    if (newStatus === 'confirmed') {
+      // Confirm calendar event
+      if (appointment.google_event_id) {
+        const { getCalendarClientForProvider } = await import('../../lib/calendar/sync');
+        const calClient = await getCalendarClientForProvider(this.env as any, appointment.provider_id);
+        if (calClient) {
+          try {
+            await calClient.updateEvent(appointment.google_event_id, {
+              status: 'confirmed',
+              transparency: 'opaque',
+            });
+          } catch (e) {
+            console.error('Failed to confirm calendar event:', e);
+          }
+        }
+      }
+    } else {
+      // Reject — delete tentative calendar event
+      if (appointment.google_event_id) {
+        const { getCalendarClientForProvider } = await import('../../lib/calendar/sync');
+        const calClient = await getCalendarClientForProvider(this.env as any, appointment.provider_id);
+        if (calClient) {
+          try {
+            await calClient.deleteEvent(appointment.google_event_id);
+          } catch (e) {
+            console.error('Failed to delete calendar event:', e);
+          }
+        }
+      }
+    }
+
+    // Update DB status
     await this.db.prepare('UPDATE appointments SET status = ?, updated_at = ? WHERE id = ?')
       .bind(newStatus, Math.floor(Date.now() / 1000), appointmentId).run();
 
+    // Confirm to doctor
     const emoji = newStatus === 'confirmed' ? '✅' : '❌';
     const action = newStatus === 'confirmed' ? 'approved' : 'rejected';
     await plugin.send(message.chatId, { text: `${emoji} Appointment ${action} for ${appointment.customer_name}.` });
