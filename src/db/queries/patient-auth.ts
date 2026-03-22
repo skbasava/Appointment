@@ -6,6 +6,7 @@ export interface PatientAuth {
   phone_verified: number;
   name: string | null;
   telegram_id: string | null;
+  totp_secret: string | null;
   created_at: string;
 }
 

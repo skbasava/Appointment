@@ -64,6 +64,12 @@ app.put('/api/appointments/:id/cancel', telegramAuthMiddleware, async (c) => {
   return cancelAppointment(c);
 });
 
+// Public verification route (no auth - for reception verification)
+app.get('/api/appointments/:id/verify', async (c) => {
+  const { verifyAppointment } = await import('./routes/appointments');
+  return verifyAppointment(c);
+});
+
 // Patient web endpoints (OTP auth)
 app.post('/api/patients/otp/send', async (c) => {
   const { sendPatientOTP } = await import('./routes/patients');

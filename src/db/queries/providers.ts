@@ -30,3 +30,23 @@ export async function listProviders(db: D1Database, limit = 50, offset = 0): Pro
   const results = await db.prepare('SELECT * FROM providers ORDER BY created_at DESC LIMIT ? OFFSET ?').bind(limit, offset).all<Provider>();
   return results.results;
 }
+
+export async function getActiveDoctors(db: D1Database, limit = 20, offset = 0) {
+  const results = await db.prepare(
+    'SELECT id, name, phone, platform, platform_user_id FROM providers WHERE type = ? AND status = ? ORDER BY name ASC LIMIT ? OFFSET ?'
+  ).bind('doctor', 'active', limit, offset).all();
+  return results.results;
+}
+
+export async function getProviderByPlatformUserId(db: D1Database, platformUserId: string) {
+  return await db.prepare(
+    'SELECT * FROM providers WHERE platform_user_id = ?'
+  ).bind(platformUserId).first();
+}
+
+export async function getHospitals(db: D1Database) {
+  const results = await db.prepare(
+    'SELECT id, name FROM providers WHERE type = ? AND status = ? ORDER BY name ASC'
+  ).bind('hospital', 'active').all();
+  return results.results;
+}

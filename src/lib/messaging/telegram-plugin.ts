@@ -71,6 +71,28 @@ export class TelegramPlugin implements MessagingPlugin {
     }
   }
 
+  async sendImageBuffer(chatId: string, pngBytes: Uint8Array, caption?: string): Promise<boolean> {
+    try {
+      const formData = new FormData();
+      formData.append('chat_id', chatId);
+      formData.append('photo', new Blob([pngBytes], { type: 'image/png' }), 'qrcode.png');
+      if (caption) formData.append('caption', caption);
+      formData.append('parse_mode', 'HTML');
+
+      console.log('Telegram sendImageBuffer:', { chatId, pngSize: pngBytes.length });
+      const response = await fetch(`https://api.telegram.org/bot${this.token}/sendPhoto`, {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await response.json() as any;
+      console.log('Telegram sendImageBuffer response:', { ok: response.ok, status: response.status, description: data?.description });
+      return response.ok;
+    } catch (error) {
+      console.error('Telegram send image buffer error:', error);
+      return false;
+    }
+  }
+
   parseWebhook(body: any): IncomingMessage | null {
     // Handle text message
     if (body.message) {
