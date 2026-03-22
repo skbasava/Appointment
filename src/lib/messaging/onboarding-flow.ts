@@ -5,6 +5,8 @@ import { PluginManager, MessagingPlugin, IncomingMessage, MessageButton, Platfor
 import { generateOTPSession, verifyOTP } from '../../lib/auth/phone-otp';
 import { normalizePhone } from '../../lib/phone/normalize';
 import { createProviderRegistry } from '../../lib/otp/providers/index';
+import { sendFirebaseVerificationCode, verifyFirebaseCode } from '../../lib/auth/firebase-phone';
+import { isTwilioOTPEnabled } from '../../lib/auth/feature-flags';
 
 // Onboarding Steps
 export const DOCTOR_STEPS = {
@@ -29,6 +31,7 @@ export const PATIENT_STEPS = {
   SEX: 'patient_sex',
   ADDRESS: 'patient_address',
   PHONE: 'patient_phone',
+  PHONE_VERIFY: 'patient_phone_verify',
   CONFIRM: 'patient_confirm',
   COMPLETE: 'patient_complete',
 };
@@ -269,16 +272,65 @@ export class OnboardingFlowHandler {
         break;
 
       case PATIENT_STEPS.PHONE:
-        if (text !== '/skip') {
+        try {
+          session.data.phone = normalizePhone(text);
+        } catch (e: any) {
+          await plugin.send(message.chatId, { text: `❌ Invalid phone number. Please enter a valid number:` });
+          return;
+        }
+
+        if (isTwilioOTPEnabled(this.env as any)) {
+          // Twilio OTP path (existing)
           try {
-            session.data.phone = normalizePhone(text);
+            if (this.otpRegistry) {
+              const otp = await generateOTPSession(this.db, session.data.phone, 'sms');
+              await this.otpRegistry.sendOTPWithFallback(session.data.phone, otp);
+            }
           } catch (e: any) {
-            await plugin.send(message.chatId, { text: `❌ Invalid phone number. Please enter a valid number (or /skip):` });
+            console.error('OTP send error:', e);
+          }
+          session.step = PATIENT_STEPS.PHONE_VERIFY;
+          await plugin.send(message.chatId, { text: '🔐 We sent a verification code to your phone. Enter the code:' });
+        } else {
+          // Firebase Phone Auth path (new)
+          try {
+            const sessionInfo = await sendFirebaseVerificationCode(session.data.phone, this.env as any);
+            session.data.firebaseSessionInfo = sessionInfo;
+          } catch (e: any) {
+            console.error('Firebase send error:', e);
+            await plugin.send(message.chatId, { text: '❌ Failed to send verification code. Please try again:' });
             return;
           }
-        } else {
-          session.data.phone = null;
+          session.step = PATIENT_STEPS.PHONE_VERIFY;
+          await plugin.send(message.chatId, { text: '🔐 We sent a verification code to your phone via Firebase. Enter the code:' });
         }
+        break;
+
+      case PATIENT_STEPS.PHONE_VERIFY:
+        if (isTwilioOTPEnabled(this.env as any)) {
+          // Twilio OTP verification
+          try {
+            if (this.otpRegistry) {
+              await verifyOTP(this.db, session.data.phone, text.trim());
+            }
+          } catch (e: any) {
+            await plugin.send(message.chatId, { text: `❌ ${e.message} Try again:` });
+            return;
+          }
+          session.data.phone_verified = 1;
+        } else {
+          // Firebase verification
+          try {
+            const result = await verifyFirebaseCode(session.data.firebaseSessionInfo, text.trim(), this.env as any);
+            session.data.firebase_uid = result.phoneNumber || session.data.phone;
+            session.data.phone_verified = 1;
+          } catch (e: any) {
+            await plugin.send(message.chatId, { text: `❌ ${e.message} Try again:` });
+            return;
+          }
+        }
+        session.step = PATIENT_STEPS.CONFIRM;
+        await plugin.send(message.chatId, { text: '✅ Phone verified!' });
         await this.showPatientConfirmation(message, session, plugin);
         break;
 
@@ -443,6 +495,17 @@ export class OnboardingFlowHandler {
         session.platform === 'telegram' ? session.platformUserId : null,
         session.platform === 'whatsapp' ? session.platformUserId : null,
         session.platform, Math.floor(Date.now() / 1000)
+      ).run();
+
+      await this.db.prepare(
+        `INSERT OR REPLACE INTO patient_auth (id, name, phone, phone_verified, firebase_uid, telegram_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        patientId, name, phone,
+        session.data.phone_verified || 0,
+        session.data.firebase_uid || null,
+        session.platform === 'telegram' ? session.platformUserId : null,
+        Math.floor(Date.now() / 1000)
       ).run();
 
       session.step = PATIENT_STEPS.COMPLETE;
