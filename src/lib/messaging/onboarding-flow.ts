@@ -161,6 +161,9 @@ export class OnboardingFlowHandler {
     } else if (data.startsWith('apt:reject:')) {
       const aptId = data.split(':')[2];
       await this.handleAppointmentAction(message, session, plugin, aptId, 'cancelled');
+    } else if (data.startsWith('book:doctor:')) {
+      const doctorId = data.split(':')[2];
+      await this.showDoctorServices(message, session, plugin, doctorId);
     }
   }
 
@@ -513,9 +516,40 @@ export class OnboardingFlowHandler {
 
   // Show booking
   private async showBooking(message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin): Promise<void> {
-    await plugin.send(message.chatId, {
-      text: '📅 Booking\n\nTo book an appointment, please visit:\nhttps://appoint.satish-aradhya.workers.dev/booking',
-    });
+    const doctors = await this.db.prepare(
+      'SELECT id, name, phone FROM providers WHERE type = ? AND status = ? ORDER BY name ASC LIMIT 10'
+    ).bind('doctor', 'active').all();
+
+    if (!doctors.results || doctors.results.length === 0) {
+      await plugin.send(message.chatId, { text: '📅 No doctors available right now.' });
+      return;
+    }
+
+    const buttons = (doctors.results as any[]).map(doc => [
+      { text: `👨‍⚕️ ${doc.name}`, callbackData: `book:doctor:${doc.id}` },
+    ]);
+    await plugin.sendWithButtons(message.chatId, '📅 <b>Select a doctor:</b>', buttons);
+  }
+
+  private async showDoctorServices(
+    message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin, doctorId: string
+  ): Promise<void> {
+    const doctor = await this.db.prepare('SELECT name FROM providers WHERE id = ?').bind(doctorId).first() as any;
+    if (!doctor) { await plugin.send(message.chatId, { text: '❌ Doctor not found.' }); return; }
+
+    const services = await this.db.prepare(
+      'SELECT id, name, duration_minutes FROM services WHERE provider_id = ? AND is_active = 1'
+    ).bind(doctorId).all();
+
+    if (!services.results || services.results.length === 0) {
+      await plugin.send(message.chatId, { text: `📅 ${doctor.name} has no services.` }); return;
+    }
+
+    session.data.bookDoctorId = doctorId;
+    const buttons = (services.results as any[]).map(svc => [
+      { text: `${svc.name} (${svc.duration_minutes}min)`, callbackData: `book:service:${svc.id}` },
+    ]);
+    await plugin.sendWithButtons(message.chatId, `📅 <b>${doctor.name}</b>\nSelect a service:`, buttons);
   }
 
   // Show appointments
