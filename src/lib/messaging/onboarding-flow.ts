@@ -3,6 +3,7 @@
 
 import { PluginManager, MessagingPlugin, IncomingMessage, MessageButton, PlatformType, OnboardingState } from './plugin';
 import { generateOTPSession, verifyOTP } from '../../lib/auth/phone-otp';
+import { generateTOTPSecret, generateTOTP, verifyTOTP } from '../../lib/auth/totp';
 import { normalizePhone } from '../../lib/phone/normalize';
 import { createProviderRegistry } from '../../lib/otp/providers/index';
 import { sendFirebaseVerificationCode, verifyFirebaseCode } from '../../lib/auth/firebase-phone';
@@ -184,30 +185,43 @@ export class OnboardingFlowHandler {
           await plugin.send(message.chatId, { text: `❌ Invalid phone number. Please enter a valid number:` });
           return;
         }
-        try {
-          if (this.otpRegistry) {
-            const otp = await generateOTPSession(this.db, session.data.phone, 'sms');
-            await this.otpRegistry.sendOTPWithFallback(session.data.phone, otp);
-          }
-        } catch (e: any) {
-          console.error('OTP send error:', e);
-        }
+        // Generate TOTP secret for doctor
+        const totpSecret = generateTOTPSecret();
+        session.data.totpSecret = totpSecret;
         session.step = DOCTOR_STEPS.PHONE_VERIFY;
-        await plugin.send(message.chatId, { text: '🔐 We sent a verification code to your phone. Enter the code:' });
+        await plugin.send(message.chatId, {
+          text: `🔐 <b>Set up your Authenticator app</b>\n\n` +
+                `Secret key: <code>${totpSecret}</code>\n\n` +
+                `Steps:\n` +
+                `1. Open Google/Microsoft Authenticator\n` +
+                `2. Tap '+' → 'Enter a setup key'\n` +
+                `3. Account: Appoint-Dr.${session.data.name || 'Doctor'}\n` +
+                `4. Key: <code>${totpSecret}</code>\n` +
+                `5. Tap 'Add'\n\n` +
+                `Then enter the 6-digit code from your authenticator:`,
+        });
         break;
 
       case DOCTOR_STEPS.PHONE_VERIFY:
+        const doctorTotpSecret = session.data.totpSecret;
+        if (!doctorTotpSecret) {
+          await plugin.send(message.chatId, { text: '❌ Session error. Please start over with /register_doctor' });
+          return;
+        }
         try {
-          if (this.otpRegistry) {
-            await verifyOTP(this.db, session.data.phone, text.trim());
+          const valid = await verifyTOTP(doctorTotpSecret, text.trim());
+          if (!valid) {
+            await plugin.send(message.chatId, { text: '❌ Incorrect code. Try again:' });
+            return;
           }
         } catch (e: any) {
-          await plugin.send(message.chatId, { text: `❌ ${e.message} Try again:` });
+          await plugin.send(message.chatId, { text: `❌ Verification error. Try again:` });
           return;
         }
         session.data.phone_verified = 1;
+        session.data.totp_enabled = 1;
         session.step = DOCTOR_STEPS.SPECIALTY;
-        await plugin.sendWithButtons(message.chatId, '✅ Phone verified!\n\n🏥 Select your specialty:', [
+        await plugin.sendWithButtons(message.chatId, '✅ Authenticator verified!\n\n🏥 Select your specialty:', [
           [{ text: 'General Physician', callbackData: 'specialty:general' }],
           [{ text: 'Cardiologist', callbackData: 'specialty:cardiology' }],
           [{ text: 'Dermatologist', callbackData: 'specialty:dermatology' }],
@@ -428,12 +442,13 @@ export class OnboardingFlowHandler {
 
       // Insert doctor
       await this.db.prepare(
-        `INSERT INTO providers (id, type, name, license_number, mobile_number, telegram_id, whatsapp_id, timezone, status, created_at, updated_at)
-         VALUES (?, 'doctor', ?, ?, ?, ?, ?, 'UTC', 'active', ?, ?)`
+        `INSERT INTO providers (id, type, name, license_number, mobile_number, telegram_id, whatsapp_id, totp_secret, totp_enabled, timezone, status, created_at, updated_at)
+         VALUES (?, 'doctor', ?, ?, ?, ?, ?, ?, ?, 'UTC', 'active', ?, ?)`
       ).bind(
         doctorId, name, licenseNumber, phone,
         session.platform === 'telegram' ? session.platformUserId : null,
         session.platform === 'whatsapp' ? session.platformUserId : null,
+        session.data.totpSecret || null, session.data.totp_enabled || 0,
         Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000)
       ).run();
 
