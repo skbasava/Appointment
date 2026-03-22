@@ -96,4 +96,7 @@ export interface Env {
   ENABLE_TELEGRAM_ONBOARDING: string;
   WHATSAPP_APP_SECRET?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
+  FIREBASE_API_KEY: string;
+  FIREBASE_PROJECT_ID: string;
+  USE_TWILIO_OTP?: string;
 }

@@ -12,3 +12,7 @@ export function isOnboardingEnabled(
   const flag = flagMap[channel];
   return env[flag] === 'true' || env[flag] === true;
 }
+
+export function isTwilioOTPEnabled(env: Record<string, string | boolean>): boolean {
+  return env['USE_TWILIO_OTP'] === 'true' || env['USE_TWILIO_OTP'] === true;
+}

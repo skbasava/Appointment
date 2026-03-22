@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isOnboardingEnabled } from '../../../src/lib/auth/feature-flags';
+import { isOnboardingEnabled, isTwilioOTPEnabled } from '../../../src/lib/auth/feature-flags';
 
 describe('isOnboardingEnabled', () => {
   it('should return true when flag is "true"', () => {
@@ -13,5 +13,19 @@ describe('isOnboardingEnabled', () => {
   });
   it('should return true for web channel always', () => {
     expect(isOnboardingEnabled('web', {})).toBe(true);
+  });
+});
+
+describe('isTwilioOTPEnabled', () => {
+  it('should return true when USE_TWILIO_OTP is "true"', () => {
+    expect(isTwilioOTPEnabled({ USE_TWILIO_OTP: 'true' })).toBe(true);
+  });
+
+  it('should return false when not set', () => {
+    expect(isTwilioOTPEnabled({})).toBe(false);
+  });
+
+  it('should return false when set to "false"', () => {
+    expect(isTwilioOTPEnabled({ USE_TWILIO_OTP: 'false' })).toBe(false);
   });
 });
