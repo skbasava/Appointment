@@ -13,9 +13,10 @@ TELEGRAM_BOT_TOKEN = "8664629995:AAGUWcA5AtwlsxMfkKgwhjivklE3o7udc9E"
 WHATSAPP_ACCESS_TOKEN = "<your-whatsapp-access-token>"
 WHATSAPP_PHONE_NUMBER_ID = "<your-phone-number-id>"
 WHATSAPP_VERIFY_TOKEN = "<your-verify-token>"
-GOOGLE_CLIENT_ID = "<your-google-client-id>"
-GOOGLE_CLIENT_SECRET = "<your-google-client-secret>"
-GOOGLE_REDIRECT_URI = "<your-redirect-uri>"
+# Google Calendar (set via: wrangler secret put GOOGLE_CLIENT_ID, etc.)
+# GOOGLE_CLIENT_ID = ""
+# GOOGLE_CLIENT_SECRET = ""
+# GOOGLE_REDIRECT_URI = ""
 
 # OTP Providers
 OTP_PROVIDER_SMS = "twilio"

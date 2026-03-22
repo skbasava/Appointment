@@ -90,9 +90,42 @@ CREATE TABLE IF NOT EXISTS notifications (
   FOREIGN KEY (appointment_id) REFERENCES appointments(id) ON DELETE CASCADE
 );
 
+-- Clinics table
+CREATE TABLE IF NOT EXISTS clinics (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  address TEXT,
+  phone TEXT,
+  created_at INTEGER NOT NULL
+);
+
+-- Doctor-Clinic mapping table
+CREATE TABLE IF NOT EXISTS doctor_clinics (
+  id TEXT PRIMARY KEY,
+  doctor_id TEXT NOT NULL,
+  clinic_id TEXT NOT NULL,
+  is_primary INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY (doctor_id) REFERENCES providers(id) ON DELETE CASCADE,
+  FOREIGN KEY (clinic_id) REFERENCES clinics(id) ON DELETE CASCADE
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_appointment_provider_time ON appointments(provider_id, start_time);
 CREATE INDEX IF NOT EXISTS idx_appointment_customer ON appointments(customer_telegram_id);
 CREATE INDEX IF NOT EXISTS idx_availability_provider ON availability_windows(provider_id, day_of_week);
 CREATE INDEX IF NOT EXISTS idx_blocked_date_provider ON blocked_dates(provider_id, date);
 CREATE INDEX IF NOT EXISTS idx_services_provider ON services(provider_id);
+
+-- Onboarding sessions table (persisted across Worker instances)
+CREATE TABLE IF NOT EXISTS onboarding_sessions (
+  session_key TEXT PRIMARY KEY,
+  step TEXT NOT NULL,
+  role TEXT,
+  data TEXT NOT NULL DEFAULT '{}',
+  platform TEXT NOT NULL,
+  platform_user_id TEXT NOT NULL,
+  platform_chat_id TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON onboarding_sessions(platform, platform_user_id);

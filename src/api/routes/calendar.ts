@@ -24,20 +24,25 @@ export async function getCalendarOAuthUrl(c: Context<{ Bindings: Env }>): Promis
   authUrl.searchParams.set('prompt', 'consent');
   authUrl.searchParams.set('state', providerId);
 
-  return c.json({ auth_url: authUrl.toString() });
+  return c.redirect(authUrl.toString());
 }
 
 export async function calendarCallback(c: Context<{ Bindings: Env }>): Promise<Response> {
   const code = c.req.query('code');
-  const providerId = c.req.query('state'); // Get provider_id from state parameter
+  const rawState = c.req.query('state') || '';
   const error = c.req.query('error');
 
+  // Parse providerId:chatId from state
+  const lastColon = rawState.lastIndexOf(':');
+  const providerId = lastColon > 0 ? rawState.substring(0, lastColon) : rawState;
+  const chatId = lastColon > 0 ? rawState.substring(lastColon + 1) : null;
+
   if (error) {
-    return c.json({ error: 'Calendar connection failed: ' + error }, 400);
+    return c.html(`<h1>❌ Calendar connection failed</h1><p>${error}</p><p>You can close this window.</p>`);
   }
 
   if (!code || !providerId) {
-    throw new ValidationError('Code and state (provider_id) are required');
+    return c.html(`<h1>❌ Missing parameters</h1><p>You can close this window.</p>`, 400);
   }
 
   // Exchange code for tokens
@@ -90,10 +95,30 @@ export async function calendarCallback(c: Context<{ Bindings: Env }>): Promise<R
 
   await upsertCalendarConnection(c.env.DB, connection);
 
-  return c.json({ 
-    message: 'Calendar connected successfully',
-    calendar_id: calendarId,
-  });
+  // Notify Telegram if chatId is available
+  if (chatId && c.env.TELEGRAM_BOT_TOKEN) {
+    try {
+      await fetch(`https://api.telegram.org/bot${c.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: `✅ Google Calendar connected! (${calendarId})`,
+          parse_mode: 'HTML',
+        }),
+      });
+    } catch (e) {
+      console.error('Failed to notify Telegram:', e);
+    }
+  }
+
+  return c.html(`<!DOCTYPE html>
+<html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Calendar Connected</title>
+<style>body{font-family:system-ui;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5}
+.box{text-align:center;padding:2rem;background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.1)}
+h1{color:#22c55e;font-size:2rem}p{color:#666;font-size:1.1rem}</style></head>
+<body><div class="box"><h1>✅ Calendar Connected!</h1><p>${calendarId}</p><p>You can close this window and go back to Telegram.</p></div></body></html>`);
 }
 
 export async function getCalendarStatus(c: Context<{ Bindings: Env }>): Promise<Response> {

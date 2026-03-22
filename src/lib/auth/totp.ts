@@ -81,12 +81,123 @@ export function generateTOTPUri(secret: string, label: string, issuer: string): 
 }
 
 export async function generateQRCode(uri: string): Promise<Uint8Array> {
-  const dataUrl = await QRCode.toDataURL(uri, { width: 256, margin: 1 });
-  const base64 = dataUrl.split(',')[1];
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
+  // Use QRCode.create() for matrix-only generation (no canvas needed)
+  const qr = QRCode.create(uri, { errorCorrectionLevel: 'L' });
+  const modules = qr.modules;
+  const moduleCount = modules.size;
+  const scale = 8; // 1 module = 8x8 pixels
+  const margin = 2 * scale;
+  const imageSize = moduleCount * scale + margin * 2;
+
+  // Build grayscale pixel data (row by row, filter byte + pixels)
+  const rowBytes = 1 + imageSize; // filter byte + pixel bytes
+  const raw = new Uint8Array(rowBytes * imageSize);
+
+  for (let y = 0; y < imageSize; y++) {
+    const rowOffset = y * rowBytes;
+    raw[rowOffset] = 0; // No filter
+    for (let x = 0; x < imageSize; x++) {
+      // Map pixel to module coordinate
+      const mx = Math.floor((x - margin) / scale);
+      const my = Math.floor((y - margin) / scale);
+      const inBounds = mx >= 0 && mx < moduleCount && my >= 0 && my < moduleCount;
+      const isDark = inBounds && modules.get(mx, my);
+      raw[rowOffset + 1 + x] = isDark ? 0x00 : 0xff; // 0=black, 255=white
+    }
   }
-  return bytes;
+
+  // Encode as PNG
+  return encodeGrayscalePNG(imageSize, imageSize, raw);
+}
+
+// Minimal PNG encoder — no canvas, no Buffer, works in Cloudflare Workers
+async function encodeGrayscalePNG(width: number, height: number, rawPixels: Uint8Array): Promise<Uint8Array> {
+  const crc32Table = buildCRC32Table();
+
+  function writeChunk(type: string, data: Uint8Array): Uint8Array {
+    const typeBytes = new TextEncoder().encode(type);
+    const len = data.length;
+    const chunk = new Uint8Array(4 + typeBytes.length + data.length + 4);
+    // Length (big-endian)
+    new DataView(chunk.buffer).setUint32(0, len);
+    chunk.set(typeBytes, 4);
+    chunk.set(data, 4 + typeBytes.length);
+    // CRC32 of type + data
+    const crcData = chunk.subarray(4, 4 + typeBytes.length + data.length);
+    const crc = crc32(crc32Table, crcData);
+    new DataView(chunk.buffer).setUint32(4 + typeBytes.length + data.length, crc);
+    return chunk;
+  }
+
+  // IHDR
+  const ihdr = new Uint8Array(13);
+  const ihdrView = new DataView(ihdr.buffer);
+  ihdrView.setUint32(0, width);
+  ihdrView.setUint32(4, height);
+  ihdr[8] = 8;  // bit depth
+  ihdr[9] = 0;  // color type 0 = grayscale
+  ihdr[10] = 0; // compression
+  ihdr[11] = 0; // filter
+  ihdr[12] = 0; // interlace
+
+  // Compress pixel data using CompressionStream (deflate)
+  const compressed = await deflate(rawPixels);
+
+  // Build PNG file
+  const signature = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const ihdrChunk = writeChunk('IHDR', ihdr);
+  const idatChunk = writeChunk('IDAT', compressed);
+  const iendChunk = writeChunk('IEND', new Uint8Array(0));
+
+  const totalLen = signature.length + ihdrChunk.length + idatChunk.length + iendChunk.length;
+  const png = new Uint8Array(totalLen);
+  let offset = 0;
+  png.set(signature, offset); offset += signature.length;
+  png.set(ihdrChunk, offset); offset += ihdrChunk.length;
+  png.set(idatChunk, offset); offset += idatChunk.length;
+  png.set(iendChunk, offset);
+  return png;
+}
+
+async function deflate(data: Uint8Array): Promise<Uint8Array> {
+  const cs = new CompressionStream('deflate');
+  const writer = cs.writable.getWriter();
+  writer.write(data);
+  writer.close();
+  const reader = cs.readable.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalLen = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    totalLen += value.length;
+  }
+  const result = new Uint8Array(totalLen);
+  let pos = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, pos);
+    pos += chunk.length;
+  }
+  return result;
+}
+
+function buildCRC32Table(): Uint32Array {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) {
+      c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    table[n] = c;
+  }
+  return table;
+}
+
+function crc32(table: Uint32Array, data: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (let i = 0; i < data.length; i++) {
+    crc = table[(crc ^ data[i]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
 }

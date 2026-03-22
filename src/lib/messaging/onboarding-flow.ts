@@ -63,21 +63,56 @@ export class OnboardingFlowHandler {
     return `${platform}:${userId}`;
   }
 
-  // Get or create session
-  getSession(platform: PlatformType, userId: string, chatId: string): OnboardingState {
+  // Get or create session (loads from DB if not in memory)
+  async getSession(platform: PlatformType, userId: string, chatId: string): Promise<OnboardingState> {
     const key = this.getSessionKey(platform, userId);
-    if (!this.sessions.has(key)) {
-      this.sessions.set(key, {
-        step: 'start',
-        role: null,
-        data: {},
-        platform,
-        platformUserId: userId,
-        platformChatId: chatId,
-        startedAt: Date.now(),
-      });
+    if (this.sessions.has(key)) {
+      return this.sessions.get(key)!;
     }
-    return this.sessions.get(key)!;
+    // Try loading from DB
+    try {
+      const row = await this.db.prepare('SELECT * FROM onboarding_sessions WHERE session_key = ?').bind(key).first() as any;
+      if (row) {
+        const session: OnboardingState = {
+          step: row.step,
+          role: row.role,
+          data: JSON.parse(row.data || '{}'),
+          platform: row.platform,
+          platformUserId: row.platform_user_id,
+          platformChatId: row.platform_chat_id,
+          startedAt: row.started_at,
+        };
+        this.sessions.set(key, session);
+        return session;
+      }
+    } catch (e) {
+      console.error('Failed to load session from DB:', e);
+    }
+    // Create new session
+    const session: OnboardingState = {
+      step: 'start',
+      role: null,
+      data: {},
+      platform,
+      platformUserId: userId,
+      platformChatId: chatId,
+      startedAt: Date.now(),
+    };
+    this.sessions.set(key, session);
+    return session;
+  }
+
+  // Persist session to DB
+  private async saveSession(session: OnboardingState): Promise<void> {
+    const key = this.getSessionKey(session.platform, session.platformUserId);
+    const now = Math.floor(Date.now() / 1000);
+    try {
+      await this.db.prepare(
+        `INSERT OR REPLACE INTO onboarding_sessions (session_key, step, role, data, platform, platform_user_id, platform_chat_id, started_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(key, session.step, session.role, JSON.stringify(session.data), session.platform, session.platformUserId, session.platformChatId, Math.floor(session.startedAt / 1000), now).run();
+    } catch (e: any) {
+      console.error('Failed to save session:', e?.message || e);
+    }
   }
 
   // Handle incoming message
@@ -85,23 +120,39 @@ export class OnboardingFlowHandler {
     const plugin = this.pluginManager.get(message.platform);
     if (!plugin) return;
 
-    const session = this.getSession(message.platform, message.userId, message.chatId);
+    const session = await this.getSession(message.platform, message.userId, message.chatId);
+
+    // Auto-advance if calendar was connected since last message
+    if (session.step === DOCTOR_STEPS.CALENDAR && session.data.doctorId) {
+      const connection = await this.db.prepare(
+        'SELECT * FROM calendar_connections WHERE provider_id = ? AND status = ?'
+      ).bind(session.data.doctorId, 'connected').first();
+      if (connection) {
+        session.step = DOCTOR_STEPS.CLINIC_NAME;
+        await this.saveSession(session);
+        await plugin.send(message.chatId, { text: '✅ Google Calendar connected!\n\n🏥 Enter your clinic/hospital name (where you see patients):' });
+        return;
+      }
+    }
 
     // Handle commands
     if (message.text?.startsWith('/')) {
       await this.handleCommand(message, session, plugin);
+      await this.saveSession(session);
       return;
     }
 
     // Handle callback data
     if (message.callbackData) {
       await this.handleCallback(message, session, plugin);
+      await this.saveSession(session);
       return;
     }
 
     // Handle text input
     if (message.text) {
       await this.handleTextInput(message, session, plugin);
+      await this.saveSession(session);
     }
   }
 
@@ -160,18 +211,36 @@ export class OnboardingFlowHandler {
     } else if (data === 'clinic:done') {
       await this.showDoctorConfirmation(message, session, plugin);
     } else if (data.startsWith('hospital:')) {
-      const hospitalId = data.split(':')[1];
-      session.data.hospitalId = hospitalId;
+      const hospitalValue = data.split(':')[1];
 
-      session.step = DOCTOR_STEPS.SPECIALTY;
-      await plugin.sendWithButtons(message.chatId, '🏥 Select your specialty:', [
-        [{ text: 'General Physician', callbackData: 'specialty:general' }],
-        [{ text: 'Cardiologist', callbackData: 'specialty:cardiology' }],
-        [{ text: 'Dermatologist', callbackData: 'specialty:dermatology' }],
-        [{ text: 'Pediatrician', callbackData: 'specialty:pediatrics' }],
-        [{ text: 'Orthopedic', callbackData: 'specialty:orthopedic' }],
-        [{ text: 'Other', callbackData: 'specialty:other' }],
-      ]);
+      if (hospitalValue === 'register_new') {
+        // Start hospital registration inline
+        session.step = 'inline_hospital_name';
+        await plugin.send(message.chatId, { text: '🏥 Enter your hospital name:' });
+      } else if (hospitalValue === 'skip') {
+        // Skip hospital, go to specialty
+        session.step = DOCTOR_STEPS.SPECIALTY;
+        await plugin.sendWithButtons(message.chatId, '🏥 Select your specialty:', [
+          [{ text: 'General Physician', callbackData: 'specialty:general' }],
+          [{ text: 'Cardiologist', callbackData: 'specialty:cardiology' }],
+          [{ text: 'Dermatologist', callbackData: 'specialty:dermatology' }],
+          [{ text: 'Pediatrician', callbackData: 'specialty:pediatrics' }],
+          [{ text: 'Orthopedic', callbackData: 'specialty:orthopedic' }],
+          [{ text: 'Other', callbackData: 'specialty:other' }],
+        ]);
+      } else {
+        // Existing hospital selected
+        session.data.hospitalId = hospitalValue;
+        session.step = DOCTOR_STEPS.SPECIALTY;
+        await plugin.sendWithButtons(message.chatId, '🏥 Select your specialty:', [
+          [{ text: 'General Physician', callbackData: 'specialty:general' }],
+          [{ text: 'Cardiologist', callbackData: 'specialty:cardiology' }],
+          [{ text: 'Dermatologist', callbackData: 'specialty:dermatology' }],
+          [{ text: 'Pediatrician', callbackData: 'specialty:pediatrics' }],
+          [{ text: 'Orthopedic', callbackData: 'specialty:orthopedic' }],
+          [{ text: 'Other', callbackData: 'specialty:other' }],
+        ]);
+      }
     } else if (data.startsWith('specialty:')) {
       session.data.specialty = data.split(':')[1];
 
@@ -180,7 +249,9 @@ export class OnboardingFlowHandler {
       const providerId = session.data.doctorId || crypto.randomUUID();
       session.data.doctorId = providerId;
 
-      const oauthUrl = `${this.baseUrl}/api/providers/${providerId}/calendar/oauth-url`;
+      // Encode providerId + chatId in state so callback can notify Telegram
+      const oauthState = `${providerId}:${message.chatId}`;
+      const oauthUrl = `${this.baseUrl}/api/providers/${encodeURIComponent(oauthState)}/calendar/oauth-url`;
 
       await plugin.send(message.chatId, {
         text: `🔐 <b>Connect your Google Calendar</b>\n\nTap the link below to authorize:\n${oauthUrl}\n\nAfter authorizing, I'll detect it automatically.`,
@@ -282,13 +353,22 @@ export class OnboardingFlowHandler {
         ).bind('hospital', 'active').all();
 
         if (!hospitals.results || hospitals.results.length === 0) {
-          await plugin.send(message.chatId, { text: '⚠️ No hospitals registered yet. Contact admin.' });
-          return;
+          // No hospitals — offer to register one or skip to clinic
+          await plugin.sendWithButtons(message.chatId,
+            '✅ Authenticator verified!\n\n🏥 No hospitals registered yet. Would you like to register your hospital?',
+            [
+              [{ text: '🏥 Yes, register hospital', callbackData: 'hospital:register_new' }],
+              [{ text: '⏭️ Skip, I work at my own clinic', callbackData: 'hospital:skip' }],
+            ]
+          );
+          break;
         }
 
         const buttons = (hospitals.results as any[]).map((h: any) => [
-          { text: h.name, callbackData: `hospital:${h.id}` },
+          { text: `🏥 ${h.name}`, callbackData: `hospital:${h.id}` },
         ]);
+        buttons.push([{ text: '➕ Register New Hospital', callbackData: 'hospital:register_new' }]);
+        buttons.push([{ text: '⏭️ Skip, I work at my own clinic', callbackData: 'hospital:skip' }]);
         await plugin.sendWithButtons(message.chatId, '✅ Authenticator verified!\n\n🏥 Select your hospital:', buttons);
         break;
 
@@ -419,7 +499,7 @@ export class OnboardingFlowHandler {
         await this.showPatientConfirmation(message, session, plugin);
         break;
 
-      // Hospital registration
+      // Hospital registration (standalone)
       case 'hospital_name': {
         const hospitalId = crypto.randomUUID();
         await this.db.prepare(
@@ -428,6 +508,30 @@ export class OnboardingFlowHandler {
 
         session.step = 'idle';
         await plugin.send(message.chatId, { text: `✅ Hospital "${text.trim()}" registered!` });
+        break;
+      }
+
+      // Inline hospital registration during doctor onboarding
+      case 'inline_hospital_name': {
+        const newHospitalId = crypto.randomUUID();
+        const now = Math.floor(Date.now() / 1000);
+        await this.db.prepare(
+          'INSERT INTO providers (id, type, name, email, firebase_uid, timezone, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).bind(newHospitalId, 'hospital', text.trim(), `hospital-${newHospitalId}@placeholder.com`, newHospitalId, 'UTC', 'active', now, now).run();
+
+        session.data.hospitalId = newHospitalId;
+        session.step = DOCTOR_STEPS.SPECIALTY;
+        await plugin.sendWithButtons(message.chatId,
+          `✅ Hospital "${text.trim()}" registered!\n\n🏥 Now select your specialty:`,
+          [
+            [{ text: 'General Physician', callbackData: 'specialty:general' }],
+            [{ text: 'Cardiologist', callbackData: 'specialty:cardiology' }],
+            [{ text: 'Dermatologist', callbackData: 'specialty:dermatology' }],
+            [{ text: 'Pediatrician', callbackData: 'specialty:pediatrics' }],
+            [{ text: 'Orthopedic', callbackData: 'specialty:orthopedic' }],
+            [{ text: 'Other', callbackData: 'specialty:other' }],
+          ]
+        );
         break;
       }
 
@@ -474,13 +578,29 @@ export class OnboardingFlowHandler {
 
   // Show doctor confirmation
   private async showDoctorConfirmation(message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin): Promise<void> {
-    const { name, licenseNumber, phone, clinics } = session.data;
-    
-    let clinicsText = '';
-    if (clinics && clinics.length > 0) {
-      clinicsText = '\n\n🏥 <b>Clinics:</b>\n';
+    const { name, phone, clinics, hospitalId } = session.data;
+
+    // Must have at least one of hospital or clinic
+    const hasHospital = !!hospitalId;
+    const hasClinic = clinics && clinics.length > 0;
+    if (!hasHospital && !hasClinic) {
+      session.step = DOCTOR_STEPS.CLINIC_NAME;
+      await plugin.send(message.chatId, {
+        text: '⚠️ You need at least one hospital or clinic.\n\n🏥 Enter your clinic/hospital name:',
+      });
+      return;
+    }
+
+    let detailsText = '';
+    if (hasHospital) {
+      // Fetch hospital name
+      const hospital = await this.db.prepare('SELECT name FROM providers WHERE id = ?').bind(hospitalId).first() as any;
+      detailsText += `\n🏥 Hospital: ${hospital?.name || 'Unknown'}`;
+    }
+    if (hasClinic) {
+      detailsText += '\n\n🏢 <b>Clinics:</b>\n';
       clinics.forEach((c: any, i: number) => {
-        clinicsText += `  ${i + 1}. ${c.name}\n     📍 ${c.address}\n     📞 ${c.phone}\n`;
+        detailsText += `  ${i + 1}. ${c.name}${c.address ? `\n     📍 ${c.address}` : ''}${c.phone ? `\n     📞 ${c.phone}` : ''}\n`;
       });
     }
 
@@ -489,7 +609,7 @@ export class OnboardingFlowHandler {
       `👨‍⚕️ Name: ${name}\n` +
       `📱 Phone: ${phone}\n` +
       `💬 Platform: ${session.platform}` +
-      clinicsText,
+      detailsText,
       [
         [{ text: '✅ Confirm & Register', callbackData: 'confirm:doctor' }],
         [{ text: '❌ Cancel', callbackData: 'confirm:cancel' }],
@@ -530,16 +650,16 @@ export class OnboardingFlowHandler {
       ).bind(providerId, 'connected').first();
 
       if (connection) {
-        session.step = DOCTOR_STEPS.CONFIRM;
-        await plugin.send(message.chatId, { text: '✅ Google Calendar connected!' });
-        await this.showDoctorConfirmation(message, session, plugin);
+        session.step = DOCTOR_STEPS.CLINIC_NAME;
+        await plugin.send(message.chatId, { text: '✅ Google Calendar connected!\n\n🏥 Now, enter your clinic/hospital name (where you see patients):' });
         return;
       }
 
       attempts++;
       if (attempts >= maxAttempts) {
+        session.step = DOCTOR_STEPS.CLINIC_NAME;
         await plugin.send(message.chatId, {
-          text: '⏰ Calendar connection timed out. Send /register_doctor to try again.',
+          text: '⏰ Calendar connection timed out. You can connect later.\n\n🏥 Enter your clinic/hospital name (where you see patients):',
         });
         return;
       }
@@ -554,27 +674,29 @@ export class OnboardingFlowHandler {
   private async saveDoctor(message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin): Promise<void> {
     try {
       const doctorId = crypto.randomUUID();
-      const { name, licenseNumber, phone, clinics } = session.data;
+      const { name, phone, clinics } = session.data;
+      const now = Math.floor(Date.now() / 1000);
 
-      // Insert doctor
+      // Insert doctor (firebase_uid is required NOT NULL, use doctorId as placeholder)
       await this.db.prepare(
-        `INSERT INTO providers (id, type, name, email, phone, totp_secret, totp_enabled, platform, platform_user_id, timezone, status, hospital_id, specialty, created_at, updated_at)
-         VALUES (?, 'doctor', ?, ?, ?, ?, ?, ?, ?, 'UTC', 'active', ?, ?, ?, ?)`
+        `INSERT INTO providers (id, type, name, email, phone, firebase_uid, totp_secret, totp_enabled, platform, platform_user_id, timezone, status, hospital_id, specialty, created_at, updated_at)
+         VALUES (?, 'doctor', ?, ?, ?, ?, ?, ?, ?, ?, 'UTC', 'active', ?, ?, ?, ?)`
       ).bind(
         doctorId, name, session.data.email || null, phone,
+        doctorId, // firebase_uid placeholder (required NOT NULL)
         session.data.totpSecret || null, session.data.totp_enabled || 0,
         session.platform || null, session.platformUserId || null,
         session.data.hospitalId || null, session.data.specialty || null,
-        Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000)
+        now, now
       ).run();
 
-      // Insert clinics
-      if (clinics) {
+      // Save clinics and link to doctor
+      if (clinics && clinics.length > 0) {
         for (const clinic of clinics) {
           const clinicId = crypto.randomUUID();
           await this.db.prepare(
             'INSERT INTO clinics (id, name, address, phone, created_at) VALUES (?, ?, ?, ?, ?)'
-          ).bind(clinicId, clinic.name, clinic.address, clinic.phone, Math.floor(Date.now() / 1000)).run();
+          ).bind(clinicId, clinic.name, clinic.address || null, clinic.phone || null, now).run();
 
           await this.db.prepare(
             'INSERT INTO doctor_clinics (id, doctor_id, clinic_id, is_primary) VALUES (?, ?, ?, ?)'
@@ -585,7 +707,7 @@ export class OnboardingFlowHandler {
       // Create default service
       await this.db.prepare(
         'INSERT INTO services (id, provider_id, name, duration_minutes, is_active, created_at) VALUES (?, ?, ?, 30, 1, ?)'
-      ).bind(crypto.randomUUID(), doctorId, 'General Consultation', Math.floor(Date.now() / 1000)).run();
+      ).bind(crypto.randomUUID(), doctorId, 'General Consultation', now).run();
 
       // Create default availability (Mon-Fri 9-17)
       for (let day = 1; day <= 5; day++) {
@@ -596,12 +718,17 @@ export class OnboardingFlowHandler {
 
       session.step = DOCTOR_STEPS.COMPLETE;
       const calendarUrl = `${this.baseUrl}/api/providers/${doctorId}/calendar/oauth-url`;
+
+      let clinicsText = '';
+      if (clinics && clinics.length > 0) {
+        clinicsText = '\n🏥 Clinics: ' + clinics.map((c: any) => c.name).join(', ');
+      }
+
       await plugin.send(message.chatId, {
         text: `✅ <b>Doctor Registration Complete!</b>\n\n` +
               `Welcome Dr. ${name}!\n\n` +
-              `Your profile is set up. Patients can now book with you.\n\n` +
+              `Your profile is set up. Patients can now book with you.${clinicsText}\n\n` +
               `Default: Mon-Fri 9AM-5PM, 30min consultations\n\n` +
-              `Connect Google Calendar: ${calendarUrl}\n\n` +
               `Commands:\n` +
               `/appointments - View bookings\n` +
               `/availability - Update schedule`,
@@ -616,18 +743,10 @@ export class OnboardingFlowHandler {
   private async savePatient(message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin): Promise<void> {
     try {
       const patientId = crypto.randomUUID();
-      const { name, age, sex, address, phone } = session.data;
+      const { name, phone } = session.data;
+      const now = Math.floor(Date.now() / 1000);
 
-      await this.db.prepare(
-        `INSERT INTO users (id, name, age, sex, address, phone, telegram_id, whatsapp_id, platform, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(
-        patientId, name, age, sex, address, phone,
-        session.platform === 'telegram' ? session.platformUserId : null,
-        session.platform === 'whatsapp' ? session.platformUserId : null,
-        session.platform, Math.floor(Date.now() / 1000)
-      ).run();
-
+      // Save to patient_auth table (only table that exists)
       await this.db.prepare(
         `INSERT OR REPLACE INTO patient_auth (id, name, phone, phone_verified, totp_secret, firebase_uid, telegram_id, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
@@ -637,7 +756,7 @@ export class OnboardingFlowHandler {
         session.data.totpSecret || null,
         session.data.firebase_uid || null,
         session.platform === 'telegram' ? session.platformUserId : null,
-        Math.floor(Date.now() / 1000)
+        now
       ).run();
 
       session.step = PATIENT_STEPS.COMPLETE;

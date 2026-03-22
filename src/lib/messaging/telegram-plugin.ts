@@ -79,10 +79,13 @@ export class TelegramPlugin implements MessagingPlugin {
       if (caption) formData.append('caption', caption);
       formData.append('parse_mode', 'HTML');
 
+      console.log('Telegram sendImageBuffer:', { chatId, pngSize: pngBytes.length });
       const response = await fetch(`https://api.telegram.org/bot${this.token}/sendPhoto`, {
         method: 'POST',
         body: formData,
       });
+      const data = await response.json() as any;
+      console.log('Telegram sendImageBuffer response:', { ok: response.ok, status: response.status, description: data?.description });
       return response.ok;
     } catch (error) {
       console.error('Telegram send image buffer error:', error);
