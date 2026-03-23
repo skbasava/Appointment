@@ -79,6 +79,8 @@ export interface Notification {
 export interface Env {
   DB: D1Database;
   TELEGRAM_BOT_TOKEN: string;
+  DOCTOR_TELEGRAM_BOT_TOKEN: string;
+  DOCTOR_WEBHOOK_SECRET: string;
   WHATSAPP_ACCESS_TOKEN: string;
   WHATSAPP_PHONE_NUMBER_ID: string;
   WHATSAPP_VERIFY_TOKEN: string;

@@ -30,7 +30,7 @@ function getHandlers(env: Env) {
   }
   if (!appointmentBot) {
     const telegram = pluginManager.get('telegram')!;
-    appointmentBot = new AppointmentBot(telegram, env.DB);
+    appointmentBot = new AppointmentBot(telegram, env.DB, env);
   }
   return { pluginManager, onboardingHandler, appointmentBot };
 }
@@ -65,31 +65,57 @@ export async function telegramWebhook(c: Context<{ Bindings: Env }>): Promise<Re
 
     // Route the message
     const command = message.text?.split(' ')[0];
-    const route = routeMessage({
-      channel: 'telegram',
-      identifier: message.userId,
-      isRegistered,
-      command,
-      env: c.env as unknown as Record<string, string>,
-    });
 
-    console.log('Telegram message:', message, 'route:', route);
+    // Registration commands and /help always go to onboarding handler
+    const onboardingCommands = ['/register_doctor', '/register_patient', '/register_hospital', '/help', '/start'];
+    const isOnboardingCommand = onboardingCommands.includes(command || '');
 
-    if (route === 'disabled') {
-      return c.json({ ok: true });
+    // Check if user has an active onboarding session (in the middle of registration)
+    // Check regardless of isRegistered — doctors register via providers table, not patient_auth
+    let hasActiveSession = false;
+    if (!isOnboardingCommand) {
+      try {
+        const session = await oh.getSession(message.platform, message.userId, message.chatId);
+        const terminalSteps = ['start', 'doctor_complete', 'patient_complete'];
+        hasActiveSession = !terminalSteps.includes(session.step);
+        if (hasActiveSession) {
+          console.log('Active session found:', session.step, 'for user:', message.userId);
+        }
+      } catch { /* no session */ }
     }
 
-    if (route === 'appointment') {
-      await ab.handleMessage({
-        chatId: message.chatId,
-        text: message.text,
-        callbackData: message.callbackData,
-        type: message.callbackData ? 'callback' : 'message',
-      });
-    } else {
-      console.log('Calling onboarding handler for:', message.userId);
+    if (isOnboardingCommand || hasActiveSession) {
+      console.log('Calling onboarding handler for:', message.userId, hasActiveSession ? '(active session)' : '');
       const result = await oh.handleMessage(message);
       console.log('Onboarding handler result:', result);
+    } else {
+      const route = routeMessage({
+        channel: 'telegram',
+        identifier: message.userId,
+        isRegistered,
+        command,
+        env: c.env as unknown as Record<string, string>,
+      });
+
+      console.log('Telegram message:', message, 'route:', route);
+
+      if (route === 'disabled') {
+        return c.json({ ok: true });
+      }
+
+      if (route === 'appointment') {
+        await ab.handleMessage({
+          chatId: message.chatId,
+          userId: message.userId,
+          text: message.text,
+          callbackData: message.callbackData,
+          type: message.callbackData ? 'callback' : 'message',
+        });
+      } else {
+        console.log('Calling onboarding handler for:', message.userId);
+        const result = await oh.handleMessage(message);
+        console.log('Onboarding handler result:', result);
+      }
     }
 
     return c.json({ ok: true });
