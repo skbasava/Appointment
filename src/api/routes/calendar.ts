@@ -97,13 +97,39 @@ export async function calendarCallback(c: Context<{ Bindings: Env }>): Promise<R
 
   // Notify Telegram if chatId is available
   if (chatId && c.env.TELEGRAM_BOT_TOKEN) {
+    let advancedSession = false;
+
+    // Advance onboarding session if in calendar step
+    try {
+      const sessionRows = await c.env.DB.prepare(
+        `SELECT session_key, data FROM onboarding_sessions WHERE step = 'doctor_calendar'`
+      ).all();
+      for (const row of (sessionRows.results as any[])) {
+        const data = JSON.parse(row.data || '{}');
+        if (data.doctorId === providerId) {
+          await c.env.DB.prepare(
+            `UPDATE onboarding_sessions SET step = 'clinic_name', updated_at = ? WHERE session_key = ?`
+          ).bind(Math.floor(Date.now() / 1000), row.session_key).run();
+          advancedSession = true;
+          break;
+        }
+      }
+    } catch (e) {
+      console.error('Failed to advance onboarding session:', e);
+    }
+
+    // Send message with next step prompt
+    const nextStepText = advancedSession
+      ? `\n\n🏥 Enter your clinic/hospital name (where you see patients):`
+      : `\n\nYou can close this window and go back to Telegram.`;
+
     try {
       await fetch(`https://api.telegram.org/bot${c.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: chatId,
-          text: `✅ Google Calendar connected! (${calendarId})`,
+          text: `✅ Google Calendar connected! (${calendarId})${nextStepText}`,
           parse_mode: 'HTML',
         }),
       });

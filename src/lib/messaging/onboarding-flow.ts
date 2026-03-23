@@ -123,14 +123,27 @@ export class OnboardingFlowHandler {
     const session = await this.getSession(message.platform, message.userId, message.chatId);
 
     // Auto-advance if calendar was connected since last message
-    if (session.step === DOCTOR_STEPS.CALENDAR && session.data.doctorId) {
-      const connection = await this.db.prepare(
-        'SELECT * FROM calendar_connections WHERE provider_id = ? AND status = ?'
-      ).bind(session.data.doctorId, 'connected').first();
-      if (connection) {
+    if (session.step === DOCTOR_STEPS.CALENDAR) {
+      let advanceToNext = false;
+
+      if (session.data.doctorId) {
+        const connection = await this.db.prepare(
+          'SELECT * FROM calendar_connections WHERE provider_id = ? AND status = ?'
+        ).bind(session.data.doctorId, 'connected').first();
+        if (connection) {
+          advanceToNext = true;
+        }
+      }
+
+      // Also check if doctor sent /skip or any plain text — let them skip calendar
+      if (!advanceToNext && message.text && !message.text.startsWith('/')) {
+        advanceToNext = true;
+      }
+
+      if (advanceToNext) {
         session.step = DOCTOR_STEPS.CLINIC_NAME;
         await this.saveSession(session);
-        await plugin.send(message.chatId, { text: '✅ Google Calendar connected!\n\n🏥 Enter your clinic/hospital name (where you see patients):' });
+        await plugin.send(message.chatId, { text: '🏥 Enter your clinic/hospital name (where you see patients):' });
         return;
       }
     }
@@ -673,7 +686,7 @@ export class OnboardingFlowHandler {
   // Save doctor to database
   private async saveDoctor(message: IncomingMessage, session: OnboardingState, plugin: MessagingPlugin): Promise<void> {
     try {
-      const doctorId = crypto.randomUUID();
+      const doctorId = session.data.doctorId || crypto.randomUUID();
       const { name, phone, clinics } = session.data;
       const now = Math.floor(Date.now() / 1000);
 

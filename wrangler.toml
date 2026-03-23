@@ -10,6 +10,8 @@ database_id = "a21cd454-0f34-457d-b3a6-608b184d49ee"
 
 [vars]
 TELEGRAM_BOT_TOKEN = "8664629995:AAGUWcA5AtwlsxMfkKgwhjivklE3o7udc9E"
+DOCTOR_TELEGRAM_BOT_TOKEN = "8660956758:AAEYElQ3kAs8RF9fkc1ON5hED2J007hMqqc"
+DOCTOR_WEBHOOK_SECRET = "doctor-bot-secret-2026"
 WHATSAPP_ACCESS_TOKEN = "<your-whatsapp-access-token>"
 WHATSAPP_PHONE_NUMBER_ID = "<your-phone-number-id>"
 WHATSAPP_VERIFY_TOKEN = "<your-verify-token>"
